@@ -1,0 +1,107 @@
+# Configuration for the ADS-B Aircraft Tracking Program
+
+development:
+  dry_run: true # If True, bypasses all hardware interaction for testing logic.
+
+adsb:
+  json_file_path: '/home/dump/Desktop/project/dump1090/public_html/data/aircraft.json'
+
+predictions:
+  deltas_sec: [1, 2, 3, 5, 8, 13, 21, 34]
+
+logging:
+  log_dir: 'logs'
+  log_max_size_mb: 25
+  command_file: 'command.json'
+
+observer:
+  latitude_deg: 40.078653
+  longitude_deg: -74.545833
+  altitude_m: 20
+
+selection:
+  min_altitude_ft: 1000
+  min_elevation_deg: 10
+  max_angular_speed_deg_s: 1.0
+  preempt_factor: 1.25
+  min_sun_separation_deg: 15
+  max_range_nm: 100
+  track_quality_min: 0.2
+  sky_masks: []
+  Bonus: true  # Added for debug visibility of the bonus flag
+
+ev:
+  start_margin_s: 5.0
+  horizon_s: 180.0
+  dt_s: 2.0
+  min_quality: 0.1
+
+stacking:
+  enabled: true
+  preview_path: "logs/latest_stack_preview.png"
+
+hardware:
+  indi_host: 'localhost'
+  indi_port: 7624
+  mount_device_name: 'ZWO AM5'
+  camera_device_name: 'Player One Uranus-C Pro'
+  focuser_device_name: 'ZWO EAF'
+  max_slew_deg_s: 6.0
+
+camera_specs:
+  focal_length_mm: 500
+  pixel_size_um: 2.9
+  resolution_width_px: 3856
+  resolution_height_px: 2180
+
+  cooling:
+    enabled: true
+    setpoint_c: -10
+
+  binning:
+    x: 1
+    y: 1
+
+  gain: 100
+  offset: 50
+
+capture:
+  snap_exposure_s: 0.1
+  sequence_exposure_s: 0.5
+  num_sequence_images: 5
+  target_blur_px: 1.0
+  min_sequence_interval_s: 1.0
+  
+  target_brightness: 128
+  exposure_adjust_factor_min: 0.5
+  exposure_adjust_factor_max: 2.0
+  exposure_min_s: 0.01
+  exposure_max_s: 1.0
+  
+  guiding:
+    enabled: true
+    track_until_lost: true
+    guide_exposure_s: 0.2
+    save_guide_png: true
+    deadzone_px: 5
+    pulse_duration_ms: 100
+    settle_time_s: 0.5
+    max_consecutive_losses: 5
+  
+  detection:
+    threshold_area_px: 50
+    sharpness_min: 10.0
+    confidence_min: 0.5
+    
+  autofocus:
+    exposure_s: 0.5
+    max_duration_s: 180
+    step_base: 50
+    scan_range: 5
+    sharpness_threshold: 20.0
+
+pointing_calibration:
+  az_offset_sign: 1
+  el_offset_sign: 1
+  plate_scale_arcsec_px: 1.196 
+  rotation_angle_deg: 0.0

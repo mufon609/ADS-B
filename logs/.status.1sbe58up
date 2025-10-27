@@ -1,0 +1,81 @@
+{
+  "mode": "slewing",
+  "current_mount_az_el": [
+    180,
+    45
+  ],
+  "queue": [],
+  "updated_at": 1759461640.5061762,
+  "icao": "a81761",
+  "iteration": "136",
+  "guide_offset_px": {
+    "dx": 0.0,
+    "dy": 0.0
+  },
+  "stable": "True",
+  "last_guide_png": "/images/snap_guide_136_1759461638.png",
+  "capture_png": "/images/capture_ad444d_1759461639.png",
+  "exposure_s": 0.5,
+  "track_candidates": [
+    {
+      "icao": "a81761",
+      "priority": -265933.2666840382,
+      "ang_speed": 0.296551371640536,
+      "slew_time": 6.13020347265191
+    }
+  ],
+  "target_az_el": [
+    149.48724603003367,
+    13.034629828150385
+  ],
+  "autofocus_alt_ft": 31650,
+  "last_guide_file": "snap_guide_136_1759461638.fits",
+  "last_capture_file": "capture_ad444d_1759461639.fits",
+  "all_aircraft": [
+    {
+      "icao": "a81761",
+      "flight": "N/A",
+      "alt": 30043,
+      "gs": 460.0,
+      "track": 222.0,
+      "dist_nm": 20.75620514307556
+    },
+    {
+      "icao": "a29982",
+      "flight": "N/A",
+      "alt": 7977,
+      "gs": 73.8,
+      "track": 42.6,
+      "dist_nm": 26.14617604465563
+    },
+    {
+      "icao": "ad444d",
+      "flight": "N/A",
+      "alt": 31650,
+      "gs": 500.0,
+      "track": 45.7,
+      "dist_nm": 20.495011021021337
+    }
+  ],
+  "observer_loc": {
+    "lat": 40.07,
+    "lon": -74.54
+  },
+  "target_details": {
+    "lat": 40.056578,
+    "lon": -74.544455,
+    "gs": 500.0,
+    "track": 45.7,
+    "alt": 31650
+  },
+  "sun_pos": {
+    "az": 325.87691914129965,
+    "el": -49.008979761479125
+  },
+  "sun_separation_deg": 156.59201116522047,
+  "image_vitals": {
+    "sharpness": 11.0,
+    "confidence": 0.95
+  },
+  "captures_taken": 136
+}

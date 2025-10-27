@@ -1,0 +1,164 @@
+{
+  "queue": [
+    {
+      "icao": "ad444d",
+      "ev": 85.44193738362988,
+      "intercept_time": 22.799845933914185,
+      "slew_time": 22.799845933914185,
+      "start_state": {
+        "az": 52.70396938936378,
+        "el": 27.558016627528243,
+        "sun_az": 158.64612615547784,
+        "sun_el": 34.343787733119335,
+        "time": 1761579008.302141,
+        "lat": 40.17845238243696,
+        "lon": -74.38135040103543,
+        "range_km": 17.852359937468048,
+        "sun_sep": 86.56293080206541,
+        "ang_speed": 0.33732721664002224
+      }
+    },
+    {
+      "icao": "a81761",
+      "ev": 69.71340856145945,
+      "intercept_time": 17.352064847946167,
+      "slew_time": 17.352064847946167,
+      "start_state": {
+        "az": 116.64603032557132,
+        "el": 12.769518601626322,
+        "sun_az": 158.61093934714657,
+        "sun_el": 34.33514033742214,
+        "time": 1761579000.8357837,
+        "lat": 39.91603382920865,
+        "lon": -74.13316150729901,
+        "range_km": 39.53088518386232,
+        "sun_sep": 43.657938655048206,
+        "ang_speed": 0.31951653622630993
+      }
+    }
+  ],
+  "track_candidates": [
+    {
+      "icao": "ad444d",
+      "ev": 85.44193738362988,
+      "intercept_time": 22.799845933914185,
+      "slew_time": 22.799845933914185,
+      "start_state": {
+        "az": 52.70396938936378,
+        "el": 27.558016627528243,
+        "sun_az": 158.64612615547784,
+        "sun_el": 34.343787733119335,
+        "time": 1761579008.302141,
+        "lat": 40.17845238243696,
+        "lon": -74.38135040103543,
+        "range_km": 17.852359937468048,
+        "sun_sep": 86.56293080206541,
+        "ang_speed": 0.33732721664002224
+      }
+    }
+  ],
+  "all_aircraft": [
+    {
+      "icao": "ad444d",
+      "flight": "JBU772",
+      "alt": 31533.0,
+      "gs": 500.0,
+      "track": 45.7,
+      "dist_nm": 5.433025875735022
+    },
+    {
+      "icao": "a81761",
+      "flight": "N/A",
+      "alt": 30403.0,
+      "gs": 460.0,
+      "track": 222.0,
+      "dist_nm": 22.27454809966422
+    },
+    {
+      "icao": "a29982",
+      "flight": "N/A",
+      "alt": 6738.0,
+      "gs": 73.8,
+      "track": 21.0,
+      "dist_nm": 24.84806341359962
+    }
+  ],
+  "observer_loc": {
+    "lat": 40.078653,
+    "lon": -74.545833
+  },
+  "camera_settings": {
+    "binning": {
+      "x": 1,
+      "y": 1
+    },
+    "gain": 100,
+    "offset": 50,
+    "cooling": {
+      "enabled": true,
+      "setpoint_c": -10
+    }
+  },
+  "mount_az_el": [
+    219.20708441119854,
+    13.057604915929291
+  ],
+  "camera_temp": -9.9,
+  "camera_cooler_power": 45.5,
+  "focuser_pos": 12345,
+  "focuser_temp": 22.8,
+  "mount_pier_side": "East",
+  "camera_binning": {
+    "x": 1,
+    "y": 1
+  },
+  "camera_gain": 100,
+  "camera_offset": 50,
+  "mode": "slewing",
+  "updated_at": 1761578982.031419,
+  "icao": "ad444d",
+  "target_az_el": [
+    56.79384504010669,
+    39.58776439542719
+  ],
+  "autofocus_alt_ft": 31727.0,
+  "iteration": 23,
+  "guide_offset_px": {
+    "dx": 0.7911795074248857,
+    "dy": -0.9733633905816532
+  },
+  "stable": true,
+  "last_guide_png": "/images/snap_ad444d_g23_1761578972421576435.png",
+  "last_guide_file": "snap_ad444d_g23_1761578972421576435.fits",
+  "target_details": {
+    "lat": 40.129215209399256,
+    "lon": -74.44656572474413,
+    "alt": 31727.0,
+    "flight": "JBU772",
+    "gs": 500.0,
+    "track": 45.7
+  },
+  "sun_pos": {
+    "az": 158.5035607265744,
+    "el": 34.308654109318475
+  },
+  "sun_sep_target_deg": 74.46613980075603,
+  "sun_sep_mount_deg": 61.81380157662784,
+  "image_vitals": {
+    "sharpness": 11.0,
+    "confidence": 0.95
+  },
+  "capture_png": "/images/capture_ad444d_1761578978491229563_2_of_5.png",
+  "sequence_exposure_s": 0.01,
+  "sequence_count": 2,
+  "last_capture_file": "capture_ad444d_1761578978491229563_2_of_5.fits",
+  "captures_taken": 97,
+  "sequence_meta": {
+    "ang_speed_deg_s": 0.701000277436472,
+    "target_blur_px_limit": 1.0,
+    "exposure_limit_reason": "config_min (0.010s)"
+  },
+  "manual_target": null,
+  "current_quality": 0.858,
+  "current_range_km": 10.1
+}
