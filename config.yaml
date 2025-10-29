@@ -38,7 +38,6 @@ ev:
 
 stacking:
   enabled: true
-  preview_path: "logs/latest_stack_preview.png"
 
 hardware:
   indi_host: 'localhost'

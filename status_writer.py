@@ -1,3 +1,4 @@
+#status_writer.py
 """
 Module for atomically writing the application status to a JSON file.
 """
@@ -6,34 +7,89 @@ import os
 import threading
 import time
 import tempfile
+import numpy as np # IMPORT NUMPY
 from config_loader import CONFIG, LOG_DIR
 
 _status_lock = threading.Lock()
+_current_status_cache: dict = {"mode": "initializing"}
+
+# --- FIX: Update NumPy type conversion for NumPy 2.0 ---
+def convert_numpy_types(obj):
+    """Recursively converts NumPy types in a dict/list to standard Python types for JSON."""
+    if isinstance(obj, dict):
+        return {k: convert_numpy_types(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_numpy_types(item) for item in obj]
+    # Handle various NumPy integer types using the abstract base class
+    elif isinstance(obj, np.integer): # More general check for all NumPy integers
+        return int(obj)
+    # Handle various NumPy float types using the abstract base class
+    # Replace np.float_ with np.floating (or specific types like np.float64 if preferred)
+    elif isinstance(obj, np.floating): # More general check for all NumPy floats
+        # Check for NaN/Inf which are not valid JSON
+        if np.isnan(obj): return None # Represent NaN as null
+        if np.isinf(obj): return str(obj) # Represent Inf as "Infinity" or "-Infinity"
+        return float(obj)
+    # Handle complex numbers (store as dict)
+    elif isinstance(obj, np.complexfloating): # More general check for complex
+        return {'real': obj.real, 'imag': obj.imag}
+    # Handle NumPy arrays (convert to list)
+    elif isinstance(obj, np.ndarray):
+        return convert_numpy_types(obj.tolist()) # Convert arrays to lists recursively
+    # Handle NumPy boolean
+    elif isinstance(obj, np.bool_):
+        return bool(obj)
+    # Handle NumPy void type (often from structured arrays)
+    elif isinstance(obj, np.void):
+        return None # Represent void as null or handle appropriately
+    # Return object unchanged if not a NumPy type or container
+    return obj
+# --- END FIX ---
 
 def write_status(status: dict):
-    """Atomically write a single JSON object the dashboard can read."""
+    """
+    Updates the in-memory status cache and atomically writes the full status
+    to a JSON file the dashboard can read. Disk I/O happens outside the lock.
+    """
+    global _current_status_cache # Explicitly modify global cache
+
+    status_to_write = None
     with _status_lock:
+        try:
+            # Deep update to handle nested dictionaries safely
+            # Convert input status dict numpy types *before* merging
+            safe_status_update = convert_numpy_types(status)
+            # Merge update into cache
+            for key, value in safe_status_update.items():
+                 _current_status_cache[key] = value # Simple update replaces/adds keys
+            _current_status_cache['updated_at'] = time.time()
+            # Create a copy for writing (conversion already happened)
+            status_to_write = _current_status_cache.copy()
+        except Exception as e:
+             print(f"Error updating status cache: {e}")
+             status_to_write = _current_status_cache.copy() if _current_status_cache else None
+
+    if status_to_write: # Ensure we have data to write
         path = os.path.join(LOG_DIR, 'status.json')
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-
-        current_status = {}
         try:
-            with open(path, 'r') as f:
-                current_status = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            pass
+            os.makedirs(os.path.dirname(path), exist_ok=True)
 
-        current_status.update(status)
-        current_status['updated_at'] = time.time()
-
-        fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".status.", text=True)
-        try:
-            with os.fdopen(fd, "w") as f:
-                json.dump(current_status, f, indent=2)
-            os.replace(tmp_path, path)
-        finally:
+            fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".status.", suffix=".json", text=True)
             try:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-            except OSError:
-                pass
+                with os.fdopen(fd, "w", encoding='utf-8') as f: # Ensure UTF-8
+                    # Ensure conversion just before dumping
+                    json_compatible_status = convert_numpy_types(status_to_write)
+                    json.dump(json_compatible_status, f, indent=2, allow_nan=False) # Ensure allow_nan=False
+                    f.flush()
+                    os.fsync(f.fileno()) # Ensure data is on disk
+                os.replace(tmp_path, path) # Atomic rename
+            finally:
+                try:
+                    if os.path.exists(tmp_path): os.remove(tmp_path)
+                except OSError: pass # Ignore cleanup errors
+        except Exception as e:
+             # Print the specific error related to writing
+             print(f"Error writing status file '{path}': {e}")
+             # Optionally print the problematic dictionary for debugging
+             # import sys
+             # print(f"Problematic status dict: {status_to_write}", file=sys.stderr)

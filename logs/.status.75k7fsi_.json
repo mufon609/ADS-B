@@ -1,0 +1,109 @@
+{
+  "mode": "slewing",
+  "queue": [],
+  "track_candidates": [
+    {
+      "icao": "ad444d",
+      "ev": 86.59383978928038,
+      "intercept_time": 17.020779848098755,
+      "slew_time": 17.020779848098755,
+      "start_state": {
+        "az": 53.35996910522778,
+        "el": 27.613966253464795,
+        "sun_az": 212.6931282771913,
+        "sun_el": 30.271515332164025,
+        "time": 1761676593.3092887,
+        "lat": 40.18020125175089,
+        "lon": -74.37895819197506,
+        "range_km": 18.15040763128878,
+        "sun_sep": 118.84010736145653,
+        "ang_speed": 0.3376798459378347
+      }
+    }
+  ],
+  "all_aircraft": [
+    {
+      "icao": "ad444d",
+      "flight": "JBU772",
+      "alt": 31786.0,
+      "gs": 500.0,
+      "track": 45.7,
+      "dist_nm": 6.6848221222977795
+    },
+    {
+      "icao": "a29982",
+      "flight": "N/A",
+      "alt": 6738.0,
+      "gs": 73.8,
+      "track": 22.8,
+      "dist_nm": 24.939192026694045
+    }
+  ],
+  "observer_loc": {
+    "lat": 40.078653,
+    "lon": -74.545833
+  },
+  "camera_settings": {
+    "binning": {
+      "x": 1,
+      "y": 1
+    },
+    "gain": 100,
+    "offset": 50,
+    "cooling": {
+      "enabled": true,
+      "setpoint_c": -10
+    }
+  },
+  "mount_az_el": [
+    206.1408335932766,
+    45.10320771501549
+  ],
+  "camera_temp": -10.1,
+  "camera_cooler_power": 45.5,
+  "focuser_pos": 12345,
+  "focuser_temp": 22.8,
+  "mount_pier_side": "East",
+  "camera_binning": {
+    "x": 1,
+    "y": 1
+  },
+  "camera_gain": 100,
+  "camera_offset": 50,
+  "updated_at": 1761676572.7816043,
+  "icao": "ad444d",
+  "target_az_el": [
+    56.46355782938318,
+    36.037523751593234
+  ],
+  "autofocus_alt_ft": 31873.0,
+  "iteration": 7,
+  "guide_offset_px": {
+    "dx": 0.7026052216890548,
+    "dy": 0.47163763007552006
+  },
+  "stable": true,
+  "last_guide_png": "/images/dry_guide_ad444d_7.png",
+  "last_guide_file": "dry_guide_ad444d_7.fits",
+  "target_details": {
+    "lat": 40.14427484818434,
+    "lon": -74.42704302604281,
+    "alt": 31533.0,
+    "flight": "JBU772",
+    "gs": 500.0,
+    "track": 45.7
+  },
+  "sun_pos": {
+    "az": 212.59904052887512,
+    "el": 30.30967658567673
+  },
+  "sun_sep_target_deg": 109.11316619523552,
+  "sun_sep_mount_deg": 15.390008992631746,
+  "image_vitals": {
+    "sharpness": 11.0,
+    "confidence": 0.95
+  },
+  "current_quality": 0.867,
+  "current_range_km": 12.5,
+  "manual_target": null
+}

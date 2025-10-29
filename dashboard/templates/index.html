@@ -85,14 +85,20 @@
     <div class="imgbox"><img id="guideImg" alt="Guide preview" style="display:none;"/></div>
     <div id="guideInfo" class="mono muted">—</div>
     <div class="mono">Offset: <span id="offsetXY">—</span></div>
+    <!-- This text was part of the removed panel, moving it here -->
+    <div class="mono muted" style="margin-top: 0.5rem;">
+        Frames: <span id="sequenceCount">—</span> / Exp: <span id="sequenceExp">—</span>s
+    </div>
   </article>
 
+  <!-- --- FIX: Removed the redundant "Last Stacked Image" panel ---
   <article>
     <h3>Last Stacked Image</h3>
     <div class="imgbox"><img id="stackedImg" alt="Stacked preview" style="display:none;"/></div>
     <div id="captureInfo" class="mono muted">—</div>
     <div class="mono">Frames: <span id="sequenceCount">—</span> / Exp: <span id="sequenceExp">—</span>s</div>
   </article>
+  -->
 </section>
 
 <!-- Latest multi-variant stacks -->
@@ -241,12 +247,12 @@ function updateDashboard(s) {
         if (ac.icao === s.icao) tr.classList.add('tracking-row');
         
         const cells = [
-            { text: ac.icao, classes: ['mono'] },
-            { text: ac.flight || 'N/A', classes: ['mono'] },
-            { text: fmt(ac.alt, 0) },
-            { text: fmt(ac.gs, 1) },
-            { text: fmt(ac.track, 1) },
-            { text: fmt(ac.dist_nm, 1) },
+          { text: ac.icao, classes: ['mono'] },
+          { text: ac.flight || 'N/A', classes: ['mono'] },
+          { text: fmt(ac.alt, 0) },
+          { text: fmt(ac.gs, 1) },
+          { text: fmt(ac.track, 1) },
+          { text: fmt(ac.dist_nm, 1) },
         ];
 
         cells.forEach(c => {
@@ -263,7 +269,7 @@ function updateDashboard(s) {
         tbody.appendChild(tr);
     });
 
-    // Image Panels (guide + legacy single preview)
+    // Image Panels (guide)
     const guideEl = q('#guideImg');
     if (s.last_guide_png) {
         guideEl.onload = () => { guideEl.style.display = 'block'; };
@@ -272,23 +278,27 @@ function updateDashboard(s) {
     }
     q('#guideInfo').textContent = s.last_guide_file || '—';
     
-    const stackedEl = q('#stackedImg');
-    const stackedPreviewPath = "{{ config.stacking.preview_path }}".replace(/^logs\//, "/logs/");
-    stackedEl.onload = () => { stackedEl.style.display = 'block'; };
-    stackedEl.onerror = () => { stackedEl.style.display = 'none'; };
-    stackedEl.src = stackedPreviewPath + '?t=' + Date.now();
+    // --- FIX: Remove JS for the deleted "Last Stacked Image" panel ---
+    // const stackedEl = q('#stackedImg');
+    // const stackedPreviewPath = "{{ config.stacking.preview_path }}".replace(/^logs\//, "/logs/");
+    // stackedEl.onload = () => { stackedEl.style.display = 'block'; };
+    // stackedEl.onerror = () => { stackedEl.style.display = 'none'; };
+    // stackedEl.src = stackedPreviewPath + '?t=' + Date.now();
+    // q('#captureInfo').textContent = s.last_capture_file || '—';
+    // --- END FIX ---
 
-    q('#captureInfo').textContent = s.last_capture_file || '—';
+    // --- FIX: Update this info (which was in the old panel) ---
     q('#sequenceCount').textContent = s.sequence_count || '—';
     q('#sequenceExp').textContent = has(s.sequence_exposure_s) ? fmt(s.sequence_exposure_s, 3) : '—';
+    // --- END FIX ---
     
     q('#offsetXY').textContent = has(s.guide_offset_px) ? `dx=${fmt(s.guide_offset_px.dx)}, dy=${fmt(s.guide_offset_px.dy)} px` : '—';
 }
 
 /* ------------------- New: Multi-variant latest stack rendering ------------------- */
 let lastStackSeqId = null;
-let lastImgUrls   = { mean:null, robust:null, anomaly:null };
-let lastLinkUrls  = {
+let lastImgUrls    = { mean:null, robust:null, anomaly:null };
+let lastLinkUrls   = {
   mean:   { png:null, fits:null },
   robust: { png:null, fits:null },
   anomaly:{ png:null, fits:null }
@@ -296,7 +306,7 @@ let lastLinkUrls  = {
 
 function _setImgOnce(el, url) {
   if (!el || !url) return;
-  if (el.dataset.urlBase === url) return;             // don't reload if unchanged
+  if (el.dataset.urlBase === url) return;              // don't reload if unchanged
   el.dataset.urlBase = url;
   el.onload = () => { el.style.display = 'block'; };
   el.onerror = () => { /* keep last frame visible; do not hide to avoid flicker */ };
@@ -331,9 +341,9 @@ function renderLatestStackPayload(p) {
   badge.textContent = p.icao || '';
   badge.style.display = p.icao ? 'inline-block' : 'none';
 
-  const mean   = p.products.mean    || {};
-  const robust = p.products.robust  || {};
-  const anom   = p.products.anomaly || {};
+  const mean    = p.products.mean    || {};
+  const robust  = p.products.robust  || {};
+  const anom    = p.products.anomaly || {};
 
   const meanUrl   = mean.png;
   const robustUrl = robust.png;
@@ -375,3 +385,4 @@ setInterval(refresh, 2000);
 </script>
 </body>
 </html>
+
