@@ -1,4 +1,3 @@
-#data_reader.py
 """
 Module for reading and parsing aircraft.json from dump1090.
 """
@@ -11,19 +10,27 @@ from config_loader import CONFIG
 def _to_float(v):
     """Safely convert a value to a float, returning None on failure."""
     try:
+        # Handle special case "ground" for alt_baro
+        if isinstance(v, str) and v.lower() == 'ground':
+            return 0.0
         return float(v)
     except (ValueError, TypeError):
         return None
 
 def _in_range(v, lo, hi):
     """Check if a value is a number and within a given range."""
-    return v is not None and lo <= v <= hi
+    # Allow comparison with None implicitly handled by comparison operators
+    try:
+        return lo <= v <= hi
+    except TypeError: # Catches comparison with None
+        return False
 
 def read_aircraft_data() -> dict:
     """
     Reads aircraft.json, validates timestamp and per-aircraft freshness,
     coerces numeric fields, and returns a sanitized dict keyed by lowercased ICAO.
     Relies *only* on timestamps within the JSON file.
+    Uses alt_geom primarily, falls back to alt_baro if alt_geom is invalid/missing.
     """
     file_path = CONFIG['adsb']['json_file_path']
 
@@ -77,13 +84,25 @@ def read_aircraft_data() -> dict:
                 skipped_stale += 1
                 continue
 
-            # Extract and validate fields (using only alt_geom as per previous fix)
+            # Extract and validate fields
             lat = _to_float(ac.get('lat'))
             lon = _to_float(ac.get('lon'))
             gs = _to_float(ac.get('gs'))
             track = _to_float(ac.get('track'))
             if track == 360.0: track = 0.0
-            alt = _to_float(ac.get('alt_geom')) # Only geometric altitude
+
+            # --- ALTITUDE FALLBACK LOGIC ---
+            alt_geom_val = _to_float(ac.get('alt_geom'))
+            alt_baro_val = _to_float(ac.get('alt_baro')) # Handles "ground" -> 0.0
+
+            alt = None
+            if alt_geom_val is not None:
+                alt = alt_geom_val # Prefer geometric
+            elif alt_baro_val is not None:
+                alt = alt_baro_val # Fallback to barometric
+            # If both are None, 'alt' remains None
+            # --- END ALTITUDE FALLBACK ---
+
             vr = _to_float(ac.get('baro_rate')) or _to_float(ac.get('vert_rate')) # Fallback for vertical rate
             flight = str(ac.get('flight') or '').strip()
 
@@ -93,17 +112,20 @@ def read_aircraft_data() -> dict:
 
             # Combined validation check
             is_valid = True
+            # Use _in_range helper which handles None safely
             if not _in_range(lat, -90, 90): is_valid = False
             if not _in_range(lon, -180, 180): is_valid = False
             if not _in_range(track, 0, 359.999): is_valid = False # Allow 0-359.999
-            if alt is None: # Check if alt_geom was missing/invalid
+            if alt is None: # Check if *both* altitudes were missing/invalid
                  is_valid = False
                  skipped_alt += 1 # Count specifically why it was skipped
-            elif not _in_range(alt, -2000, 80000): # Allow higher altitude? Check reasonable max.
+            elif not _in_range(alt, -2000, 80000): # Check reasonable range for the chosen altitude
                  is_valid = False
             if not _in_range(gs, 0, 1200): is_valid = False
 
             if not is_valid:
+                # Add optional verbose logging here if needed
+                # print(f"DEBUG: Skipping {icao} - lat:{lat}, lon:{lon}, alt:{alt}, track:{track}, gs:{gs}")
                 skipped_invalid += 1
                 continue
 
@@ -115,7 +137,7 @@ def read_aircraft_data() -> dict:
                 'lon': lon,
                 'gs': gs,              # knots
                 'track': track,        # degrees
-                'alt': alt,            # feet (geometric)
+                'alt': alt,            # feet (geometric preferred, baro fallback)
                 'vert_rate': vr,       # ft/min (can be None)
                 'timestamp': sample_time, # Absolute epoch time of measurement
                 'flight': flight,
@@ -125,6 +147,12 @@ def read_aircraft_data() -> dict:
                 # --- END REVERT ---
             }
             processed_count += 1
+
+        # Optional: Add summary print here if needed
+        # if skipped_stale or skipped_invalid or skipped_alt:
+        #    print(f"DEBUG: Read aircraft: {processed_count} processed, "
+        #          f"{skipped_stale} stale, {skipped_invalid} invalid (pos/range), "
+        #          f"{skipped_alt} missing alt.")
 
         return aircraft_dict
 
@@ -136,4 +164,7 @@ def read_aircraft_data() -> dict:
          return {} # Return empty on decode error after retry
     except Exception as e:
         print(f"ERROR: Unexpected error in read_aircraft_data: {e}")
+        # Optionally re-raise or log traceback here
+        # import traceback
+        # traceback.print_exc()
         return {}

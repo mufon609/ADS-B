@@ -1,8 +1,8 @@
 #!/bin/bash
 
-pathImages=$pwd/logs/images
+pathImages="$PWD/logs/images"
+pathStack="$PWD/logs/stack"
 
-rm $pathImages/capture_*png
-rm $pathImages/capture_*fits
-rm $pathImages/snap_*png
-rm $pathImages/snap_*fits
+rm -f "$pathImages"/{capture_,snap_}*.{png,fits}
+find . -name '__pycache__' -type d -exec rm -rf {} +
+rm -rf "$pathStack"/*

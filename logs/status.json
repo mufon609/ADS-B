@@ -1,42 +1,31 @@
 {
   "mode": "idle",
   "queue": [],
-  "track_candidates": [
-    {
-      "icao": "ad444d",
-      "ev": 101.89012780897913,
-      "intercept_time": 21.285806894302368,
-      "slew_time": 21.285806894302368,
-      "start_state": {
-        "az": 56.13185156703538,
-        "el": 35.87491351333879,
-        "sun_az": 193.3646198974139,
-        "sun_el": 35.21639697313784,
-        "time": 1761758802.7116897,
-        "lat": 40.14682115265852,
-        "lon": -74.42374793705343,
-        "range_km": 12.869417368063987,
-        "sun_sep": 98.51381731308133,
-        "ang_speed": 0.5391412307492428
-      }
-    }
-  ],
+  "track_candidates": [],
   "all_aircraft": [
-    {
-      "icao": "ad444d",
-      "flight": "JBU772",
-      "alt": 31602.0,
-      "gs": 500.0,
-      "track": 45.7,
-      "dist_nm": 3.2546631917730524
-    },
     {
       "icao": "a29982",
       "flight": "N/A",
-      "alt": 6083.0,
+      "alt": 3441.0,
       "gs": 73.8,
-      "track": 17.8,
-      "dist_nm": 24.700972712916506
+      "track": 333.0,
+      "dist_nm": 21.32751528918881
+    },
+    {
+      "icao": "ad444d",
+      "flight": "JBU772",
+      "alt": 31639.0,
+      "gs": 500.0,
+      "track": 45.7,
+      "dist_nm": 27.990791402131144
+    },
+    {
+      "icao": "a81761",
+      "flight": "N/A",
+      "alt": 31203.0,
+      "gs": 460.0,
+      "track": 222.0,
+      "dist_nm": 44.19535864018217
     }
   ],
   "observer_loc": {
@@ -56,8 +45,8 @@
     }
   },
   "mount_az_el": [
-    222.8681105054156,
-    11.88505034961456
+    180.0,
+    45.0
   ],
   "camera_temp": -10.1,
   "camera_cooler_power": 45.5,
@@ -70,50 +59,5 @@
   },
   "camera_gain": 100,
   "camera_offset": 50,
-  "updated_at": 1761758778.3855433,
-  "icao": null,
-  "target_az_el": [
-    222.73151160234033,
-    12.527759495691342
-  ],
-  "autofocus_alt_ft": 31772.0,
-  "iteration": 31,
-  "guide_offset_px": {
-    "dx": 0.5917517568316271,
-    "dy": -0.49023328064731686
-  },
-  "stable": true,
-  "last_guide_png": "/images/snap_ad444d_g31_1761758769961564711.png",
-  "last_guide_file": "snap_ad444d_g31_1761758769961564711.fits",
-  "target_details": {
-    "lat": 40.10072558807197,
-    "lon": -74.48537296506801,
-    "alt": 31614.0,
-    "flight": "JBU772",
-    "gs": 500.0,
-    "track": 45.7
-  },
-  "sun_pos": {
-    "az": 193.22539398528355,
-    "el": 35.23745197420008
-  },
-  "sun_sep_target_deg": 76.5080498760948,
-  "sun_sep_mount_deg": 35.562419326260596,
-  "image_vitals": {
-    "sharpness": 60.0,
-    "confidence": 0.95
-  },
-  "current_quality": 0.8,
-  "current_range_km": 5.7,
-  "sequence_exposure_s": 0.01,
-  "sequence_count": 2,
-  "captures_taken": 152,
-  "sequence_meta": {
-    "ang_speed_deg_s": 1.106466074578009,
-    "target_blur_px_limit": 1.0,
-    "exposure_limit_reason": "config_min (0.010s)"
-  },
-  "last_capture_file": "capture_ad444d_1761758776340277844_2_of_5.fits",
-  "capture_png": "/images/capture_ad444d_1761758776340277844_2_of_5.png",
-  "manual_target": null
+  "updated_at": 1761769088.7660427
 }

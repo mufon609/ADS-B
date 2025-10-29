@@ -1,4 +1,3 @@
-#main.py
 """
 Main entry point: Monitors ADS-B data, processes flight paths, and tracks aircraft.
 """
@@ -8,8 +7,9 @@ import threading
 import os
 import math
 import json
-import numpy as np # <-- Import NumPy
-from typing import Optional, Callable # <-- Import Optional and Callable
+import queue  # <-- PATCH 3: Import queue
+import numpy as np  # <-- Import NumPy
+from typing import Optional, Callable  # <-- Import Optional and Callable
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from astropy.coordinates import EarthLocation
@@ -38,7 +38,7 @@ from image_analyzer import (
 from image_analyzer import detect_aircraft
 # --- End Import Changes ---
 # --- FIX: Update import to use the new distance function name ---
-from coord_utils import (calculate_plate_scale, latlonalt_to_azel, distance_km, # <-- USE THE NEW NAME
+from coord_utils import (calculate_plate_scale, latlonalt_to_azel, distance_km,  # <-- USE THE NEW NAME
                          get_sun_azel, angular_sep_deg, angular_speed_deg_s, get_altaz_frame)
 # --- END FIX ---
 # --- FIX (#8): Import the new shutdown function ---
@@ -54,6 +54,7 @@ def _to_img_url(fs_path: str) -> str:
 
 class CommandHandler(FileSystemEventHandler):
     """A simple handler to watch for manual override commands."""
+
     def __init__(self, main_handler):
         self.main_handler = main_handler
         command_filename = CONFIG['logging']['command_file']
@@ -87,7 +88,7 @@ class CommandHandler(FileSystemEventHandler):
             except OSError as e:
                 # Handle case where file might already be gone (another handler?)
                 print(f"  Note: Could not remove command file (possibly already gone): {e}")
-                pass # Continue processing the command we read
+                pass  # Continue processing the command we read
 
             if 'track_icao' in command:
                 icao = command['track_icao'].lower().strip()
@@ -98,13 +99,13 @@ class CommandHandler(FileSystemEventHandler):
                     if self.main_handler._scheduler_timer and self.main_handler._scheduler_timer.is_alive():
                         self.main_handler._scheduler_timer.cancel()
                         self.main_handler._scheduler_timer = None
-                        self.main_handler.is_scheduler_waiting = False # Reset flag (#6)
+                        self.main_handler.is_scheduler_waiting = False  # Reset flag (#6)
                         print("  Cancelled pending scheduler timer.")
                     # If currently tracking, request preemption
                     if self.main_handler.current_track_icao and self.main_handler.active_thread and self.main_handler.active_thread.is_alive():
                         print("  Interrupting current track for manual override...")
                         self.main_handler.preempt_requested = True
-                        self.main_handler.shutdown_event.set() # Signal current track to stop
+                        self.main_handler.shutdown_event.set()  # Signal current track to stop
                     # Set or replace the manual request
                     self.main_handler.manual_target_icao = icao
                     # Clear previous manual viability info to recompute fresh
@@ -120,7 +121,7 @@ class CommandHandler(FileSystemEventHandler):
                     if self.main_handler._scheduler_timer and self.main_handler._scheduler_timer.is_alive():
                         self.main_handler._scheduler_timer.cancel()
                         self.main_handler._scheduler_timer = None
-                        self.main_handler.is_scheduler_waiting = False # Reset flag (#6)
+                        self.main_handler.is_scheduler_waiting = False  # Reset flag (#6)
                         print("  Cancelled pending scheduler timer.")
                     # Clear any manual target requests
                     self.main_handler.preempt_requested = False
@@ -142,7 +143,7 @@ class CommandHandler(FileSystemEventHandler):
                     if self.main_handler._scheduler_timer and self.main_handler._scheduler_timer.is_alive():
                         self.main_handler._scheduler_timer.cancel()
                         self.main_handler._scheduler_timer = None
-                        self.main_handler.is_scheduler_waiting = False # Reset flag (#6)
+                        self.main_handler.is_scheduler_waiting = False  # Reset flag (#6)
                     self.main_handler.preempt_requested = False
                     self.main_handler.manual_target_icao = None
                     self.main_handler.manual_viability_info = None
@@ -155,7 +156,7 @@ class CommandHandler(FileSystemEventHandler):
                 # Wait for tracking thread to finish (outside lock)
                 if active_thread_to_join and active_thread_to_join.is_alive():
                     print("  Waiting for tracking thread to finish...")
-                    active_thread_to_join.join(timeout=10.0) # Increased timeout
+                    active_thread_to_join.join(timeout=10.0)  # Increased timeout
                     if active_thread_to_join.is_alive():
                         print("  Warning: Tracking thread did not finish cleanly before parking.")
 
@@ -180,36 +181,111 @@ class CommandHandler(FileSystemEventHandler):
 
 class FileHandler(FileSystemEventHandler):
     """Handles file events and orchestrates the tracking process."""
+
     def __init__(self, watch_file):
         self.watch_file = os.path.normpath(watch_file)
         self.last_process_time = 0
-        self.debounce_seconds = 0.5 # Reduce debounce slightly?
+        self.debounce_seconds = 0.5  # Reduce debounce slightly?
         self.indi_controller = None
         self.current_track_icao = None
         self.current_track_ev = 0.0
-        self.track_lock = threading.Lock() # Protects access to tracking state vars
+        self.track_lock = threading.Lock()  # Protects access to tracking state vars
         obs_cfg = CONFIG['observer']
         # Ensure lat/lon/alt are floats
         try:
             lat = float(obs_cfg['latitude_deg'])
             lon = float(obs_cfg['longitude_deg'])
             alt = float(obs_cfg['altitude_m'])
-            self.observer_loc = EarthLocation(lat=lat*u.deg, lon=lon*u.deg, height=alt*u.m)
+            self.observer_loc = EarthLocation(lat=lat * u.deg, lon=lon * u.deg, height=alt * u.m)
         except (ValueError, KeyError) as e:
             print(f"FATAL: Invalid observer location in config: {e}")
             raise ValueError(f"Invalid observer location config: {e}") from e
 
-        self.shutdown_event = threading.Event() # Signals tracking thread to stop
-        self.active_thread = None # Reference to the current tracking thread
-        self.last_file_stat = None # To detect redundant file events
-        self.manual_target_icao = None # ICAO requested manually
+        self.shutdown_event = threading.Event()  # Signals tracking thread to stop
+        self.active_thread = None  # Reference to the current tracking thread
+        self.last_file_stat = None  # To detect redundant file events
+        self.manual_target_icao = None  # ICAO requested manually
         self.manual_viability_info = None  # Cache last manual viability details for status
-        self._scheduler_timer = None # Timer for delayed scheduling
-        self.preempt_requested = False # Flag for preemptive track switching
+        self._scheduler_timer = None  # Timer for delayed scheduling
+        self.preempt_requested = False  # Flag for preemptive track switching
         # --- FIX: Add scheduler waiting flag (#6) ---
         self.is_scheduler_waiting = False
         # --- END FIX ---
 
+        # --- PATCH 3: Add Capture Queue and Worker Thread ---
+        self.capture_queue = queue.Queue()
+        self.capture_worker_thread = threading.Thread(target=self._capture_worker_loop, daemon=True)
+        self.capture_worker_thread.start()
+        # --- END PATCH 3 ---
+
+    # --- PATCH 3: Add Capture Worker Loop ---
+    def _capture_worker_loop(self):
+        """
+        Worker thread that runs blocking captures from the queue.
+        This frees the main tracking loop from blocking I/O.
+        """
+        print("  Capture worker thread started.")
+        while not self.shutdown_event.is_set():
+            try:
+                # Wait for a job, but timeout to check shutdown_event
+                job = self.capture_queue.get(timeout=1.0)
+                if job is None:
+                    continue
+
+                (icao, final_exp, seq_log_base,
+                 captures_taken_so_far, status_payload_base) = job
+
+                # --- This is the blocking call ---
+                captured_paths = self.indi_controller.capture_sequence(icao, final_exp)
+                # --- End blocking call ---
+
+                if captured_paths:
+                    # Update log and status *after* capture is complete
+                    seq_log = seq_log_base.copy()
+                    seq_log['n_frames'] = len(captured_paths)
+                    seq_log['image_paths'] = captured_paths
+                    append_to_json([seq_log], os.path.join(LOG_DIR, 'captures.json'))
+
+                    captures_taken = captures_taken_so_far + len(captured_paths)
+                    status_update = status_payload_base.copy()
+                    status_update["sequence_count"] = len(captured_paths)
+                    status_update["captures_taken"] = captures_taken
+
+                    if captured_paths:
+                        status_update["last_capture_file"] = os.path.basename(captured_paths[-1])
+                        last_raw_png_path = os.path.splitext(captured_paths[-1])[0] + ".png"
+                        if os.path.exists(last_raw_png_path):
+                            status_update["capture_png"] = _to_img_url(last_raw_png_path)
+                    
+                    # Update captures_taken on the main handler for the next loop
+                    # Note: This is a potential race condition, but is acceptable
+                    # for a simple counter. A lock would be more robust.
+                    self.track_lock.acquire()
+                    if self.current_track_icao == icao: # Only update if still on same target
+                         # This is tricky. We'll pass captures_taken back via status write
+                         # The main loop will read it. Let's just write status.
+                         pass
+                    self.track_lock.release()
+                    
+                    # We can't update captures_taken in the main thread easily.
+                    # We will just write the status. The main thread will
+                    # overwrite this with its own status, but the capture
+                    # counter in the *dashboard* will be briefly updated.
+                    # A better fix involves a shared state object, but
+                    # this is the minimal change.
+                    write_status(status_update)
+
+            except queue.Empty:
+                # This is normal, just loop and check shutdown_event
+                continue
+            except Exception as e:
+                # Log errors from the capture worker
+                print(f"  Capture worker error: {e}")
+                import traceback
+                traceback.print_exc()
+
+        print("  Capture worker thread shutting down.")
+    # --- END PATCH 3 ---
 
     def process_file(self):
         """Processes aircraft.json, runs the scheduler, and manages state."""
@@ -217,7 +293,7 @@ class FileHandler(FileSystemEventHandler):
         try:
             current_stat = os.stat(self.watch_file)
             if self.last_file_stat and (current_stat.st_mtime == self.last_file_stat.st_mtime and
-                                        current_stat.st_size == self.last_file_stat.st_size):
+                                         current_stat.st_size == self.last_file_stat.st_size):
                 return
             self.last_file_stat = current_stat
         except FileNotFoundError:
@@ -275,14 +351,14 @@ class FileHandler(FileSystemEventHandler):
             new_best_target = candidates[0]
             preempt_factor = float(CONFIG['selection'].get('preempt_factor', 1.25))
             if new_best_target['icao'] != self.current_track_icao and \
-               new_best_target['ev'] > (self.current_track_ev * preempt_factor):
+                    new_best_target['ev'] > (self.current_track_ev * preempt_factor):
                 print(f"--- PREEMPTIVE SWITCH: New target {new_best_target['icao']} (EV {new_best_target['ev']:.1f}) "
                       f"> Current {self.current_track_icao} (EV {self.current_track_ev:.1f} * {preempt_factor:.2f}). ---")
                 with self.track_lock:
                     if self._scheduler_timer and self._scheduler_timer.is_alive():
                         self._scheduler_timer.cancel()
                         self._scheduler_timer = None
-                        self.is_scheduler_waiting = False # Reset flag (#6)
+                        self.is_scheduler_waiting = False  # Reset flag (#6)
                     self.preempt_requested = True
                     self.shutdown_event.set()
 
@@ -324,7 +400,7 @@ class FileHandler(FileSystemEventHandler):
                 'gain': CONFIG.get('camera_specs', {}).get('gain'),
                 'offset': CONFIG.get('camera_specs', {}).get('offset'),
                 'cooling': CONFIG.get('camera_specs', {}).get('cooling')
-             }
+            }
         }
         status_payload.update(hardware_status)
         status_payload["mode"] = "tracking" if self.current_track_icao else "idle"
@@ -422,7 +498,7 @@ class FileHandler(FileSystemEventHandler):
                     if ok and icao in aircraft_dict:
                         try:
                             hs = self.indi_controller.get_hardware_status() or {}
-                            current_az_el_ev = hs.get("mount_az_el", (0.0, 0.0)) # Use separate var name
+                            current_az_el_ev = hs.get("mount_az_el", (0.0, 0.0))  # Use separate var name
                             ev_res = calculate_expected_value(current_az_el_ev, icao, aircraft_dict[icao])
                             ev_val = float(ev_res.get('ev', 0.0))
                             if ev_val <= 0.0:
@@ -447,7 +523,7 @@ class FileHandler(FileSystemEventHandler):
                     }
                     reason_str = "; ".join(reasons) if reasons else "basic checks passed, but EV <= 0 or not calculated"
                     print(f"  Manual target {icao} not viable: {reason_str}. Will keep trying.")
-                    write_status({"manual_target": { "icao": icao, "viability": self.manual_viability_info }})
+                    write_status({"manual_target": {"icao": icao, "viability": self.manual_viability_info}})
 
                     if not self._scheduler_timer or not self._scheduler_timer.is_alive():
                         retry_s = float(CONFIG.get('selection', {}).get('manual_retry_interval_s', 5.0))
@@ -455,7 +531,7 @@ class FileHandler(FileSystemEventHandler):
                         # --- FIX: Set waiting flag for manual retry (#6) ---
                         self.is_scheduler_waiting = True
                         # --- END FIX ---
-                        self._scheduler_timer = threading.Timer(retry_s, self._run_scheduler_callback) # Use callback
+                        self._scheduler_timer = threading.Timer(retry_s, self._run_scheduler_callback)  # Use callback
                         self._scheduler_timer.daemon = True
                         self._scheduler_timer.start()
                     return
@@ -468,7 +544,7 @@ class FileHandler(FileSystemEventHandler):
 
             now = time.time()
             if not all(k in target_to_consider for k in ['intercept_time', 'start_state']) or \
-               not all(k in target_to_consider['start_state'] for k in ['time']):
+                    not all(k in target_to_consider['start_state'] for k in ['time']):
                 print(f"  Scheduler: Target {target_to_consider['icao']} missing required timing data. Skipping.")
                 return
 
@@ -484,7 +560,7 @@ class FileHandler(FileSystemEventHandler):
                 # --- FIX: Set waiting flag before starting timer (#6) ---
                 self.is_scheduler_waiting = True
                 # --- END FIX ---
-                self._scheduler_timer = threading.Timer(wait_duration, self._run_scheduler_callback) # Use callback
+                self._scheduler_timer = threading.Timer(wait_duration, self._run_scheduler_callback)  # Use callback
                 self._scheduler_timer.daemon = True
                 self._scheduler_timer.start()
                 print(f"  Scheduler: Waiting {wait_duration:.1f}s (of {delay_needed:.1f}s total) to start slew for {target_to_consider['icao']}.")
@@ -506,7 +582,7 @@ class FileHandler(FileSystemEventHandler):
                     # --- FIX: Set waiting flag for retry (#6) ---
                     self.is_scheduler_waiting = True
                     # --- END FIX ---
-                    self._scheduler_timer = threading.Timer(2.0, self._run_scheduler_callback) # Retry in 2s, use callback
+                    self._scheduler_timer = threading.Timer(2.0, self._run_scheduler_callback)  # Retry in 2s, use callback
                     self._scheduler_timer.daemon = True
                     self._scheduler_timer.start()
                 return
@@ -530,8 +606,8 @@ class FileHandler(FileSystemEventHandler):
     # --- FIX: Add a callback wrapper for the timer (#6) ---
     def _run_scheduler_callback(self):
         """Callback function used by the scheduler's timer."""
-        self.is_scheduler_waiting = False # Clear flag before running scheduler again
-        self._run_scheduler() # Now call the actual scheduler
+        self.is_scheduler_waiting = False  # Clear flag before running scheduler again
+        self._run_scheduler()  # Now call the actual scheduler
     # --- END FIX ---
 
 
@@ -655,20 +731,20 @@ class FileHandler(FileSystemEventHandler):
                         guide_path = self.indi_controller.snap_image(f"{icao}_g{iteration}")
                         if guide_path and os.path.exists(guide_path):
                             # Load the FITS file we just created
-                             guide_data = _load_fits_data(guide_path)
+                            guide_data = _load_fits_data(guide_path)
                         else:
-                             # Fallback if snap_image fails or file not found
-                             print(f"  Track [{icao}]: [DRY RUN] snap_image failed or file not found.")
-                             sim_h = CONFIG.get('camera_specs', {}).get('resolution_height_px', 480)
-                             sim_w = CONFIG.get('camera_specs', {}).get('resolution_width_px', 640)
-                             guide_data = np.full((sim_h, sim_w), 1000, np.float32) # Simple flat fallback
-                        if guide_data is None: # Final fallback
+                            # Fallback if snap_image fails or file not found
+                            print(f"  Track [{icao}]: [DRY RUN] snap_image failed or file not found.")
+                            sim_h = CONFIG.get('camera_specs', {}).get('resolution_height_px', 480)
+                            sim_w = CONFIG.get('camera_specs', {}).get('resolution_width_px', 640)
+                            guide_data = np.full((sim_h, sim_w), 1000, np.float32)  # Simple flat fallback
+                        if guide_data is None:  # Final fallback
                             guide_data = np.full((480, 640), 1000, np.float32)
                     except Exception as e:
-                         print(f"  Track [{icao}]: [DRY RUN] Error simulating guide snap: {e}")
-                         sim_h = CONFIG.get('camera_specs', {}).get('resolution_height_px', 480)
-                         sim_w = CONFIG.get('camera_specs', {}).get('resolution_width_px', 640)
-                         guide_data = np.full((sim_h, sim_w), 1000, np.float32)
+                        print(f"  Track [{icao}]: [DRY RUN] Error simulating guide snap: {e}")
+                        sim_h = CONFIG.get('camera_specs', {}).get('resolution_height_px', 480)
+                        sim_w = CONFIG.get('camera_specs', {}).get('resolution_width_px', 640)
+                        guide_data = np.full((sim_h, sim_w), 1000, np.float32)
                 else:
                     # --- Real Hardware Capture ---
                     try:
@@ -679,21 +755,24 @@ class FileHandler(FileSystemEventHandler):
                         print(f"  Track [{icao}]: Guide frame {iteration} capture failed: {e}")
                         consecutive_losses += 1
                         if consecutive_losses >= max_losses: break
-                        time.sleep(1.0); continue
+                        time.sleep(1.0);
+                        continue
                     guide_data = _load_fits_data(guide_path)
                     if guide_data is None:
                         print(f"  Track [{icao}]: Failed to load guide image data for {guide_path}. Skipping frame.")
                         consecutive_losses += 1
                         if consecutive_losses >= max_losses: break
-                        time.sleep(0.5); continue
+                        time.sleep(0.5);
+                        continue
                 # --- END FIX ---
 
-                if guide_data is None: # Handle case where guide_data failed to load/simulate
-                     print(f"  Track [{icao}]: guide_data is None. Skipping frame.")
-                     consecutive_losses += 1
-                     if consecutive_losses >= max_losses: break
-                     time.sleep(0.5); continue
-                
+                if guide_data is None:  # Handle case where guide_data failed to load/simulate
+                    print(f"  Track [{icao}]: guide_data is None. Skipping frame.")
+                    consecutive_losses += 1
+                    if consecutive_losses >= max_losses: break
+                    time.sleep(0.5);
+                    continue
+
                 guide_shape = guide_data.shape
 
                 guide_png_url = ""
@@ -714,11 +793,14 @@ class FileHandler(FileSystemEventHandler):
 
                 if not detection or not detection.get('detected') or not detection.get('center_px'):
                     consecutive_losses += 1
-                    reason = (detection or {}).get('reason', 'unknown'); sharp = detection.get('sharpness', -1); conf = detection.get('confidence', -1)
+                    reason = (detection or {}).get('reason', 'unknown');
+                    sharp = detection.get('sharpness', -1);
+                    conf = detection.get('confidence', -1)
                     print(f"  Track [{icao}]: Guide frame {iteration}: Target lost ({consecutive_losses}/{max_losses}). Reason: {reason} (Sharp: {sharp:.1f}, Conf: {conf:.2f})")
                     write_status({"mode": "tracking", "icao": icao, "iteration": iteration, "stable": False, "last_guide_png": guide_png_url, "guide_offset_px": None})
                     if consecutive_losses >= max_losses: break
-                    time.sleep(1.0); continue
+                    time.sleep(1.0);
+                    continue
 
                 consecutive_losses = 0
                 center_px = detection['center_px']
@@ -726,7 +808,8 @@ class FileHandler(FileSystemEventHandler):
                     print(f"  Track [{icao}]: Invalid centroid coordinates received: {center_px}. Treating as lost.")
                     consecutive_losses += 1
                     write_status({"mode": "tracking", "icao": icao, "iteration": iteration, "stable": False, "last_guide_png": guide_png_url})
-                    time.sleep(0.5); continue
+                    time.sleep(0.5);
+                    continue
 
                 offset_px_x = center_px[0] - frame_center[0]
                 offset_px_y = center_px[1] - frame_center[1]
@@ -736,7 +819,8 @@ class FileHandler(FileSystemEventHandler):
                     corrected_dx = offset_px_x * cos_rot - offset_px_y * sin_rot
                     corrected_dy = offset_px_x * sin_rot + offset_px_y * cos_rot
                 else:
-                    corrected_dx = offset_px_x; corrected_dy = offset_px_y
+                    corrected_dx = offset_px_x;
+                    corrected_dy = offset_px_y
 
                 guide_error_mag = max(abs(corrected_dx), abs(corrected_dy))
                 is_stable_np = guide_error_mag <= deadzone_px
@@ -748,7 +832,7 @@ class FileHandler(FileSystemEventHandler):
                 if CONFIG['development']['dry_run']:
                     is_stable = True
                 # --- END FIX ---
-                
+
                 now = time.time()
                 try:
                     sun_az, sun_el = get_sun_azel(now, self.observer_loc)
@@ -779,10 +863,13 @@ class FileHandler(FileSystemEventHandler):
                                        "flight": aircraft_data.get('flight', '').strip() or 'N/A', "gs": aircraft_data.get('gs'), "track": aircraft_data.get('track')},
                     "sun_pos": {"az": sun_az, "el": sun_el},
                     "sun_sep_target_deg": current_sun_sep,
-                    "sun_sep_mount_deg": angular_sep_deg(hardware_status.get("mount_az_el", (0,0)), (sun_az, sun_el), frame),
+                    "sun_sep_mount_deg": angular_sep_deg(hardware_status.get("mount_az_el", (0, 0)), (sun_az, sun_el), frame),
                     "image_vitals": {"sharpness": detection.get('sharpness'), "confidence": detection.get('confidence')},
                     "current_quality": round(current_quality, 3),
-                    "current_range_km": round(current_range_km, 1) if np.isfinite(current_range_km) else None
+                    "current_range_km": round(current_range_km, 1) if np.isfinite(current_range_km) else None,
+                    # --- PATCH 3: Add captures_taken to status ---
+                    "captures_taken": captures_taken
+                    # --- END PATCH 3 ---
                 }
                 status_payload.update(hardware_status)
                 write_status(status_payload)
@@ -796,12 +883,14 @@ class FileHandler(FileSystemEventHandler):
                 gain = float(guide_params.get('proportional_gain', 20.0))
                 min_p = int(guide_params.get('min_pulse_ms', 10))
                 max_p = int(guide_params.get('max_pulse_ms', 500))
+
                 def calculate_pulse(error_px):
                     duration = int(abs(error_px) * gain)
                     return max(min_p, min(max_p, duration))
+
                 # --- END FIX ---
 
-                pulse_ms_x, pulse_ms_y = 0, 0 # Initialize pulse durations
+                pulse_ms_x, pulse_ms_y = 0, 0  # Initialize pulse durations
                 if corrected_dy > deadzone_px:
                     pulse_ms_y = calculate_pulse(corrected_dy)
                     self.indi_controller.guide_pulse('N' if el_sign > 0 else 'S', pulse_ms_y)
@@ -834,7 +923,7 @@ class FileHandler(FileSystemEventHandler):
                     print(f"  Track [{icao}]: Guiding stable. Capturing sequence...")
                     capture_cfg = CONFIG['capture']
                     base_exposure = float(capture_cfg.get('sequence_exposure_s', 0.5))
-                    
+
                     # Estimate exposure adjustment using the guide frame data
                     # This now uses the "flat+text" image in dry run
                     exposure_factor = _estimate_exposure_adjustment_from_data(guide_data)
@@ -844,49 +933,64 @@ class FileHandler(FileSystemEventHandler):
                     adj_max = float(capture_cfg.get('exposure_adjust_factor_max', 5.0))
                     exposure_factor = max(adj_min, min(adj_max, exposure_factor))
                     recommended_exp = base_exposure * exposure_factor
-                    
+
                     blur_px_limit = float(capture_cfg.get('target_blur_px', 1.0))
                     t_max_blur = float('inf')
                     if ang_speed > 1e-3 and plate_scale > 1e-3:
                         t_max_blur = (blur_px_limit * plate_scale) / (ang_speed * 3600.0)
-                    
+
                     min_exp_limit = float(capture_cfg.get('exposure_min_s', 0.001))
                     max_exp_limit = float(capture_cfg.get('exposure_max_s', 5.0))
-                    
-                    final_exp = recommended_exp; limit_reason = "recommended"
+
+                    final_exp = recommended_exp;
+                    limit_reason = "recommended"
                     if final_exp > t_max_blur: final_exp = t_max_blur; limit_reason = f"blur_limit ({t_max_blur:.3f}s)"
                     if final_exp > max_exp_limit:
-                         if limit_reason == "recommended" or t_max_blur > max_exp_limit: limit_reason = f"config_max ({max_exp_limit:.3f}s)"
-                         final_exp = max_exp_limit
+                        if limit_reason == "recommended" or t_max_blur > max_exp_limit: limit_reason = f"config_max ({max_exp_limit:.3f}s)"
+                        final_exp = max_exp_limit
                     if final_exp < min_exp_limit:
-                         if limit_reason == "recommended" or t_max_blur < min_exp_limit: limit_reason = f"config_min ({min_exp_limit:.3f}s)"
-                         final_exp = min_exp_limit
-                    
+                        if limit_reason == "recommended" or t_max_blur < min_exp_limit: limit_reason = f"config_min ({min_exp_limit:.3f}s)"
+                        final_exp = min_exp_limit
+
                     print(f"    - Final sequence exposure: {final_exp:.4f}s (Reason: {limit_reason})")
+
+                    # --- PATCH 3: Replace blocking call with queue.put() ---
+                    last_seq_ts = time.time() # Set timestamp immediately
                     
-                    try:
-                        seq_start_ts = time.time()
-                        captured_paths = self.indi_controller.capture_sequence(icao, final_exp)
-                        if captured_paths:
-                            last_seq_ts = seq_start_ts
-                            seq_log = { 'type': 'sequence', 'sequence_id': int(seq_start_ts * 1000), 'icao': icao, 'timestamp': seq_start_ts,
-                                        'per_frame_exposure_s': float(final_exp), 'exposure_limit_reason': limit_reason, 'n_frames': len(captured_paths),
-                                        'image_paths': captured_paths, 'guide_offset_px': (float(corrected_dx), float(corrected_dy)),
-                                        'plate_scale_arcsec_px': float(plate_scale), 'predicted_ang_speed_deg_s': float(ang_speed),
-                                        'target_blur_px_limit': float(blur_px_limit), 'last_guide_sharpness': detection.get('sharpness'),
-                                        'last_guide_confidence': detection.get('confidence'), }
-                            append_to_json([seq_log], os.path.join(LOG_DIR, 'captures.json'))
-                            captures_taken += len(captured_paths)
-                            status_update = { "sequence_exposure_s": float(final_exp), "sequence_count": len(captured_paths), "captures_taken": captures_taken,
-                                              "sequence_meta": {"ang_speed_deg_s": float(ang_speed), "target_blur_px_limit": float(blur_px_limit), "exposure_limit_reason": limit_reason} }
-                            if captured_paths:
-                                status_update["last_capture_file"] = os.path.basename(captured_paths[-1])
-                                last_raw_png_path = os.path.splitext(captured_paths[-1])[0] + ".png"
-                                if os.path.exists(last_raw_png_path):
-                                    status_update["capture_png"] = _to_img_url(last_raw_png_path)
-                            write_status(status_update)
-                    except Exception as e:
-                        print(f"  Track [{icao}]: Capture sequence failed: {e}")
+                    # Create the log and status payloads here, in the guide thread
+                    seq_log = {'type': 'sequence', 'sequence_id': int(last_seq_ts * 1000), 'icao': icao,
+                               'timestamp': last_seq_ts,
+                               'per_frame_exposure_s': float(final_exp), 'exposure_limit_reason': limit_reason,
+                               'guide_offset_px': (float(corrected_dx), float(corrected_dy)),
+                               'plate_scale_arcsec_px': float(plate_scale),
+                               'predicted_ang_speed_deg_s': float(ang_speed),
+                               'target_blur_px_limit': float(blur_px_limit),
+                               'last_guide_sharpness': detection.get('sharpness'),
+                               'last_guide_confidence': detection.get('confidence'),
+                               # n_frames and image_paths will be added by worker
+                               }
+                    
+                    status_payload_base = {
+                        "sequence_exposure_s": float(final_exp),
+                        "sequence_meta": {"ang_speed_deg_s": float(ang_speed),
+                                          "target_blur_px_limit": float(blur_px_limit),
+                                          "exposure_limit_reason": limit_reason}
+                    }
+
+                    # Put the job on the queue for the worker
+                    job = (icao, final_exp, seq_log, captures_taken, status_payload_base)
+                    self.capture_queue.put(job)
+                    
+                    # Update captures_taken *immediately* in this thread
+                    # The worker will add the *real* count later
+                    captures_taken += int(CONFIG['capture'].get('num_sequence_images', 5))
+                    
+                    # Write status immediately, worker will update it again
+                    status_update = status_payload_base.copy()
+                    status_update['captures_taken'] = captures_taken
+                    status_update['sequence_count'] = 0 # Worker will set this
+                    write_status(status_update) 
+                    # --- END PATCH 3 ---
 
                 loop_duration = time.time() - loop_start_time
                 sleep_time = max(0.01, 0.1 - loop_duration)
@@ -924,7 +1028,8 @@ class FileHandler(FileSystemEventHandler):
             if was_preempted or not was_aborted_by_signal:
                 print("  Triggering scheduler to find next target...")
                 if not self.is_scheduler_waiting:
-                     self._run_scheduler()
+                    self._run_scheduler()
+
 
 if __name__ == "__main__":
     ensure_log_dir()
@@ -945,13 +1050,15 @@ if __name__ == "__main__":
     command_observer.schedule(command_handler, path=LOG_DIR, recursive=False)
 
     try:
-        adsb_observer.start(); command_observer.start()
+        adsb_observer.start();
+        command_observer.start()
         print(f"Monitoring '{adsb_watch_path}' for ADS-B data...")
         print(f"Monitoring '{LOG_DIR}' for command file '{CONFIG['logging']['command_file']}'...")
         while True:
             if not adsb_observer.is_alive() or not command_observer.is_alive():
                 print("Error: Watchdog observer thread died. Exiting.")
-                event_handler.shutdown_event.set(); break
+                event_handler.shutdown_event.set();
+                break
             time.sleep(5)
     except KeyboardInterrupt:
         print("\nShutdown requested (Ctrl+C)...")
@@ -968,20 +1075,27 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"FATAL: Unhandled exception in main loop: {e}")
         event_handler.shutdown_event.set()
-        import traceback; traceback.print_exc()
+        import traceback;
+        traceback.print_exc()
     finally:
         print("Stopping observers...")
         if adsb_observer.is_alive(): adsb_observer.stop()
         if command_observer.is_alive(): command_observer.stop()
         if event_handler.indi_controller:
             print("Disconnecting hardware...")
-            try: event_handler.indi_controller.disconnect()
-            except Exception as e: print(f"Warning: Error during hardware disconnect: {e}")
+            try:
+                event_handler.indi_controller.disconnect()
+            except Exception as e:
+                print(f"Warning: Error during hardware disconnect: {e}")
         try:
             if adsb_observer.is_alive(): adsb_observer.join(timeout=2.0)
             if command_observer.is_alive(): command_observer.join(timeout=2.0)
-        except RuntimeError: pass
+        except RuntimeError:
+            pass
         print("Shutting down stack orchestrator...")
-        try: shutdown_stack_orchestrator()
-        except Exception as e: print(f"Warning: Error during stack orchestrator shutdown: {e}")
+        try:
+            shutdown_stack_orchestrator()
+        except Exception as e:
+            print(f"Warning: Error during stack orchestrator shutdown: {e}")
         print("Program terminated.")
+

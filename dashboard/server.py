@@ -12,7 +12,11 @@ import tempfile
 import time
 from typing import Optional, Dict, List, Tuple
 import asyncio  # IMPORTED
+import uvicorn # Added for running the server
 
+# Assuming config_loader is in the parent directory
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config_loader import CONFIG, LOG_DIR
 
 IMAGES_DIR = os.path.join(LOG_DIR, 'images')
@@ -42,11 +46,11 @@ def read_status():
         with open(path, 'r', encoding='utf-8') as f: # Specify encoding
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError, OSError) as e:
-         print(f"Warning: Error reading status file '{path}': {e}")
-         return {"mode": "error", "error_message": f"Could not read status: {e}"}
+        print(f"Warning: Error reading status file '{path}': {e}")
+        return {"mode": "error", "error_message": f"Could not read status: {e}"}
     except Exception as e: # Catch any other unexpected errors
-         print(f"ERROR: Unexpected error reading status file '{path}': {e}")
-         return {"mode": "error", "error_message": f"Unexpected error reading status: {e}"}
+        print(f"ERROR: Unexpected error reading status file '{path}': {e}")
+        return {"mode": "error", "error_message": f"Unexpected error reading status: {e}"}
 
 def _rel_to_logs_url(path: str) -> Optional[str]:
     """Map an absolute path under LOG_DIR to a /logs/... URL."""
@@ -64,8 +68,8 @@ def _rel_to_logs_url(path: str) -> Optional[str]:
         url_path = rel.replace(os.sep, "/")
         return f"/logs/{url_path}"
     except Exception as e:
-         print(f"Warning: Error creating relative URL for path '{path}': {e}")
-         return None
+        print(f"Warning: Error creating relative URL for path '{path}': {e}")
+        return None
 
 def _safe_read_json(path: str) -> Optional[dict]:
     """Safely reads a JSON file. (Blocking I/O)"""
@@ -75,11 +79,11 @@ def _safe_read_json(path: str) -> Optional[dict]:
         with open(path, "r", encoding='utf-8') as f: # Specify encoding
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
-         print(f"Warning: Error reading JSON file '{path}': {e}")
-         return None
+        print(f"Warning: Error reading JSON file '{path}': {e}")
+        return None
     except Exception as e:
-         print(f"ERROR: Unexpected error reading JSON file '{path}': {e}")
-         return None
+        print(f"ERROR: Unexpected error reading JSON file '{path}': {e}")
+        return None
 
 def _sequence_mtime(seq_dir: str) -> float:
     """Get modification time of manifest or directory. (Blocking I/O)"""
@@ -100,19 +104,19 @@ def _find_sequence_dirs_for_icao(icao: str) -> List[str]:
             return out
         # Use scandir for potentially better performance on large directories
         with os.scandir(icao_dir) as entries:
-             for entry in entries:
-                  if entry.is_dir():
-                       out.append(entry.path)
+            for entry in entries:
+                if entry.is_dir():
+                    out.append(entry.path)
     except OSError as e:
-         print(f"Error listing sequence directories for {icao}: {e}")
-         return [] # Return empty list on error
+        print(f"Error listing sequence directories for {icao}: {e}")
+        return [] # Return empty list on error
 
     # Sort by modification time (newest first)
     try:
         out.sort(key=_sequence_mtime, reverse=True)
     except Exception as e:
-         print(f"Warning: Error sorting sequence directories for {icao}: {e}")
-         # Return unsorted list if sorting fails
+        print(f"Warning: Error sorting sequence directories for {icao}: {e}")
+        # Return unsorted list if sorting fails
     return out
 
 def _find_latest_sequence_dir() -> Optional[Tuple[str, str, str]]:
@@ -126,28 +130,28 @@ def _find_latest_sequence_dir() -> Optional[Tuple[str, str, str]]:
         if not os.path.isdir(STACK_ROOT):
             return None
         with os.scandir(STACK_ROOT) as icao_entries:
-             for icao_entry in icao_entries:
-                  if not icao_entry.is_dir(): continue
-                  icao = icao_entry.name
-                  icao_dir = icao_entry.path
-                  try:
-                       with os.scandir(icao_dir) as seq_entries:
-                            for seq_entry in seq_entries:
-                                 if not seq_entry.is_dir(): continue
-                                 seq_dir = seq_entry.path
-                                 mt = _sequence_mtime(seq_dir)
-                                 if mt > newest_mt:
-                                      newest_mt = mt
-                                      newest_seq_dir = seq_dir
-                                      newest_icao = icao
-                                      newest_seq_id = seq_entry.name
-                  except OSError as e:
-                       print(f"Warning: Error scanning directory '{icao_dir}': {e}")
-                       continue # Skip problematic ICAO directory
+            for icao_entry in icao_entries:
+                if not icao_entry.is_dir(): continue
+                icao = icao_entry.name
+                icao_dir = icao_entry.path
+                try:
+                    with os.scandir(icao_dir) as seq_entries:
+                        for seq_entry in seq_entries:
+                            if not seq_entry.is_dir(): continue
+                            seq_dir = seq_entry.path
+                            mt = _sequence_mtime(seq_dir)
+                            if mt > newest_mt:
+                                newest_mt = mt
+                                newest_seq_dir = seq_dir
+                                newest_icao = icao
+                                newest_seq_id = seq_entry.name
+                except OSError as e:
+                    print(f"Warning: Error scanning directory '{icao_dir}': {e}")
+                    continue # Skip problematic ICAO directory
 
     except OSError as e:
-         print(f"Error scanning STACK_ROOT '{STACK_ROOT}': {e}")
-         return None # Cannot proceed if root scan fails
+        print(f"Error scanning STACK_ROOT '{STACK_ROOT}': {e}")
+        return None # Cannot proceed if root scan fails
 
     if newest_seq_dir:
         return newest_icao, newest_seq_id, newest_seq_dir
@@ -201,13 +205,26 @@ async def index(request: Request):
     # Pass only necessary config parts to template if desired
     return template.render(request=request, config=CONFIG)
 
+# --- START: PATCH 1 (FastAPI Version) ---
+# This block replaces the broken Flask code
 @app.get("/api/status")
-async def api_status():
-    """Provides the latest status as a JSON API endpoint, ensuring no caching."""
-    # --- FIX (#10): Move blocking I/O to a thread ---
-    data = await asyncio.to_thread(read_status)
-    # --- END FIX ---
-    return JSONResponse(content=data, headers={"Cache-Control": "no-store"})
+async def api_get_status():
+    """Serves the latest status.json content."""
+    # Move blocking I/O to a thread, as done with other endpoints
+    status_data = await asyncio.to_thread(read_status)
+    
+    status_code = 200
+    if status_data.get("error") == "status_file_missing":
+        status_code = 404
+    elif status_data.get("mode") == "error" or status_data.get("error"):
+        status_code = 500
+    
+    return JSONResponse(
+        content=status_data,
+        headers={"Cache-Control": "no-store"},
+        status_code=status_code
+    )
+# --- END: PATCH 1 (FastAPI Version) ---
 
 @app.post("/command/track", response_class=RedirectResponse)
 async def command_track(icao: str = Form(...)):
@@ -304,17 +321,17 @@ async def api_recent_stacks(icao: str, limit: int = 5):
     items: List[Dict] = []
     if tasks:
         try:
-             # Gather results, handle potential errors during concurrent fetching
-             results = await asyncio.gather(*tasks, return_exceptions=True)
-             # Filter out exceptions, keep successful results
-             items = [res for res in results if not isinstance(res, Exception)]
-             # Log exceptions if any occurred
-             exceptions = [res for res in results if isinstance(res, Exception)]
-             if exceptions:
-                  print(f"Warning: Errors occurred fetching recent stacks for {icao}: {exceptions}")
+            # Gather results, handle potential errors during concurrent fetching
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            # Filter out exceptions, keep successful results
+            items = [res for res in results if not isinstance(res, Exception)]
+            # Log exceptions if any occurred
+            exceptions = [res for res in results if isinstance(res, Exception)]
+            if exceptions:
+                print(f"Warning: Errors occurred fetching recent stacks for {icao}: {exceptions}")
         except Exception as e:
-             print(f"Error gathering recent stack data for {icao}: {e}")
-             # Return potentially empty list if gather fails
+            print(f"Error gathering recent stack data for {icao}: {e}")
+            # Return potentially empty list if gather fails
 
     if not items:
         return JSONResponse(
@@ -356,3 +373,11 @@ async def api_sequence_manifest(icao: str, sequence_id: str):
         "manifest": manifest, # Can be None if manifest file missing/corrupt
     }
     return JSONResponse(content=payload, headers={"Cache-Control": "no-store"})
+
+if __name__ == "__main__":
+    # Get host and port from config, with fallbacks
+    host = CONFIG.get('dashboard', {}).get('host', '0.0.0.0')
+    port = CONFIG.get('dashboard', {}).get('port', 5001)
+    print(f"Starting dashboard server at http://{host}:{port}...")
+    uvicorn.run(app, host=host, port=port)
+
