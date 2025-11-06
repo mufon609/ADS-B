@@ -7,14 +7,10 @@ import os
 import time
 import threading
 from typing import List, Dict, Any, Iterable
-# --- FIX (#11): Import defaultdict ---
 from collections import defaultdict
-# --- END FIX ---
 from config_loader import CONFIG, LOG_DIR
 
-# --- FIX (#11): Use per-file locks instead of a single global lock ---
 _file_locks = defaultdict(threading.Lock)
-# --- END FIX ---
 
 def ensure_log_dir():
     """Creates log directory and images subdir if they don't exist, using absolute paths."""
@@ -129,9 +125,7 @@ def append_to_json(datas: List[Dict[str, Any]], file_path: str):
     threshold_mb = int(CONFIG.get('logging', {}).get('log_max_size_mb', 25))
     threshold_bytes = max(1024 * 1024, threshold_mb * 1024 * 1024) # Ensure at least 1MB threshold
 
-    # --- FIX (#11): Acquire lock specific to this file_path ---
     with _file_locks[file_path]:
-    # --- END FIX ---
         # Check if rotation is needed before reading the log
         if _should_rotate(file_path, datas, threshold_bytes):
             if os.path.exists(file_path):

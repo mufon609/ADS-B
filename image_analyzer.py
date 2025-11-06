@@ -20,7 +20,6 @@ def _load_fits_data(image_path: str) -> Optional[np.ndarray]:
     try:
         # Using memmap=False might be safer for frequent access/modification?
         with fits.open(image_path, memmap=False) as hdul:
-            # --- FIX: Explicitly check if data attribute is None ---
             # Check if HDUList is valid and if the primary HDU exists
             if not hdul or len(hdul) == 0:
                  print(f"Warning: Invalid or empty FITS file: {image_path}.")
@@ -28,7 +27,6 @@ def _load_fits_data(image_path: str) -> Optional[np.ndarray]:
             # Check if the data attribute itself exists and is not None
             img_data = hdul[0].data
             if img_data is None:
-            # --- END FIX ---
                  print(f"Warning: No data found in primary HDU of {image_path}.")
                  return None
 
@@ -94,13 +92,10 @@ def _normalize_to_8bit(normed_float_data: np.ndarray) -> Optional[np.ndarray]:
 def _measure_sharpness_from_data(image_data: np.ndarray) -> float:
     """
     Measures sharpness using Laplacian variance.
-    FIX: Uses simple min-max normalization instead of ZScale for robustness.
     """
-    # --- FIX: Use simple min-max normalization, not ZScale ---
     if image_data is None or not np.any(np.isfinite(image_data)):
         return 0.0
     img_8bit = cv2.normalize(np.nan_to_num(image_data), None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-    # --- END FIX ---
 
     if img_8bit is None:
         return 0.0
@@ -114,7 +109,6 @@ def _measure_sharpness_from_data(image_data: np.ndarray) -> float:
         print(f"Error calculating Laplacian variance: {e}")
         return 0.0
 
-# --- FIX: Rework Auto-Exposure Logic (#19) ---
 def _estimate_exposure_adjustment_from_data(image_data: np.ndarray) -> float:
     """
     Estimates exposure adjustment factor from the RAW float32 image data,
@@ -159,12 +153,10 @@ def _estimate_exposure_adjustment_from_data(image_data: np.ndarray) -> float:
     except Exception as e:
         print(f"Error estimating exposure adjustment: {e}")
         return 1.0 # Return neutral factor on error
-# --- END FIX (#19) ---
 
 def _detect_aircraft_from_data(image_data: np.ndarray, original_shape: Tuple[int, int]) -> Dict:
     """Internal aircraft detection logic operating on float32 NumPy array."""
     
-    # --- FIX: Add Dry Run check to internal function ---
     if CONFIG['development']['dry_run']:
         # This function is called by the stacker. In dry run, the image
         # is just text. Bypass detection and return a high-confidence
@@ -173,7 +165,6 @@ def _detect_aircraft_from_data(image_data: np.ndarray, original_shape: Tuple[int
         # Calculate real sharpness of the flat+text image
         sharpness = _measure_sharpness_from_data(image_data)
         return {'detected': True, 'center_px': (w / 2.0, h / 2.0), 'confidence': 0.95, 'sharpness': sharpness}
-    # --- END FIX ---
     
     try:
         if image_data is None or image_data.size == 0:
@@ -283,14 +274,12 @@ def _save_png_preview_from_data(image_data: np.ndarray, png_path: str) -> str:
     """Creates and saves a PNG preview from float32 NumPy data."""
     if image_data is None: return ""
 
-    # --- FIX: Use simple min-max normalization, not ZScale ---
     # ZScale fails on high-contrast synthetic images (flat + text)
     if not np.any(np.isfinite(image_data)):
         img_8bit = np.zeros(image_data.shape[:2], dtype=np.uint8)
     else:
         img_8bit = cv2.normalize(np.nan_to_num(image_data), None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
     if img_8bit is None: return ""
-    # --- END FIX ---
 
     try:
         os.makedirs(os.path.dirname(png_path), exist_ok=True)
@@ -306,14 +295,12 @@ def _save_png_preview_from_data(image_data: np.ndarray, png_path: str) -> str:
 
 def measure_sharpness(image_path: str) -> float:
     """Measures image sharpness, using robust min-max normalization."""
-    # --- FIX: Remove dry_run logic ---
     if CONFIG['development']['dry_run']:
         if "autofocus" in os.path.basename(image_path):
              # Keep autofocus simulation logic
             return CONFIG.get('capture', {}).get('autofocus', {}).get('sharpness_threshold', 20.0) + 100
         # For other calls (like stacker), fall through to real calculation
         pass
-    # --- END FIX ---
 
     img_data = _load_fits_data(image_path)
     if img_data is None:
@@ -381,9 +368,7 @@ def save_png_preview(fits_path: str, png_path_out: Optional[str] = None) -> str:
     else:
         png_path = png_path_out
 
-    # --- FIX: Use simple min-max for dry run, ZScale for real ---
     # The _save_png_preview_from_data function now uses min-max
     # We will call that directly.
     return _save_png_preview_from_data(img_data, png_path)
-    # --- END FIX ---
 

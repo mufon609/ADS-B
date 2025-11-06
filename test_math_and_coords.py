@@ -9,26 +9,21 @@ import time
 from astropy.coordinates import EarthLocation
 import astropy.units as u
 
-# --- FIX: Import the function ACTUALLY used by the application ---
 from dead_reckoning import estimate_positions_at_times
-# from dead_reckoning import estimate_positions # <-- FIX: This function is unused
-
-from coord_utils import latlonalt_to_azel, haversine_distance
+from coord_utils import latlonalt_to_azel, distance_km
 from config_loader import CONFIG
 
-# Temporarily override config for tests (relevant if testing estimate_positions)
-# CONFIG['predictions']['deltas_sec'] = [30] # <-- FIX: Not needed if testing estimate_positions_at_times
 
 class TestMathAndCoords(unittest.TestCase):
 
-    def test_haversine_distance(self):
-        """Tests Haversine distance between NYC and LA."""
+    def test_distance_km(self):
+        """Tests geodesic distance between NYC and LA."""
         lat1, lon1 = 40.64, -73.78
         lat2, lon2 = 33.94, -118.40
         known_dist_km = 3982 # <-- FIX: Updated to kilometers (was 2150 nm)
-        calc_dist = haversine_distance(lat1, lon1, lat2, lon2)
+        calc_dist = distance_km(lat1, lon1, lat2, lon2)
         # Check if the calculated distance is close to the known distance in kilometers
-        self.assertAlmostEqual(calc_dist, known_dist_km, delta=45) # <-- FIX: Adjusted delta for km
+        self.assertAlmostEqual(calc_dist, known_dist_km, delta=45)
 
     def test_dead_reckoning(self):
         """Tests a simple dead reckoning projection due East using the correct function."""
@@ -37,7 +32,6 @@ class TestMathAndCoords(unittest.TestCase):
             'lat': 34.0, 'lon': -118.0, 'gs': 500, 'track': 90,
             'alt': 35000, 'vert_rate': 0, 'timestamp': start_time
         }
-        # --- FIX: Test estimate_positions_at_times ---
         future_time = start_time + 30.0
         predictions = estimate_positions_at_times(start_data, [future_time])
         self.assertEqual(len(predictions), 1, "Should return exactly one prediction")
@@ -49,14 +43,13 @@ class TestMathAndCoords(unittest.TestCase):
         # At latitude 34 deg, 1 deg longitude is approx 111.32 * cos(34) ~= 92.2 km
         # Expected longitude change: 7.7 km / 92.2 km/deg ~= 0.08 degrees
         self.assertAlmostEqual(est['est_lat'], 34.0, delta=0.01)
-        self.assertAlmostEqual(est['est_lon'], -118.0 + 0.08, delta=0.01) # <-- FIX: Adjusted expected longitude
+        self.assertAlmostEqual(est['est_lon'], -118.0 + 0.08, delta=0.01)
         self.assertAlmostEqual(est['est_alt'], 35000, delta=1)
 
     def test_dead_reckoning_edge_cases(self):
         """Tests edge cases like stationary and North/South tracks using the correct function."""
         start_time = time.time()
         start_data = {'lat': 40.0, 'lon': -74.0, 'gs': 0, 'track': 123, 'alt': 10000, 'vert_rate': 0, 'timestamp': start_time}
-        # --- FIX: Test estimate_positions_at_times ---
         future_time = start_time + 30.0
         predictions = estimate_positions_at_times(start_data, [future_time])
         self.assertEqual(len(predictions), 1)

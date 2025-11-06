@@ -9,7 +9,7 @@ import os
 from collections import defaultdict
 from typing import List
 from config_loader import CONFIG, LOG_DIR
-from coord_utils import haversine_distance # Returns kilometers now
+from coord_utils import distance_km
 
 def find_closest_actual(timestamps: List[float], target_time: float) -> int:
     """Finds the index of the closest timestamp in a sorted list using bisection."""
@@ -98,8 +98,7 @@ def calculate_errors() -> dict:
                 if lat is None or lon is None:
                     continue
                 
-                # --- FIX: Convert haversine result (km) to nautical miles ---
-                dist_km = haversine_distance(est_lat, est_lon, lat, lon)
+                dist_km = distance_km(est_lat, est_lon, lat, lon)
                 dist_nm = dist_km / 1.852 # Convert km to nm
                 errors_by_delta[delta_key].append(dist_nm) # Append nm error
     

@@ -7,9 +7,7 @@ from typing import Optional
 from astropy.coordinates import EarthLocation, SkyCoord, AltAz, get_sun
 from astropy import units as u
 from astropy.time import Time
-# --- FIX (#20): Import geopy ---
 from geopy.distance import geodesic
-# --- END FIX ---
 from config_loader import CONFIG
 
 def get_altaz_frame(observer_loc: EarthLocation) -> AltAz:
@@ -55,7 +53,6 @@ def angular_speed_deg_s(start_azel: tuple, end_azel: tuple, time_delta_s: float,
     angular_distance = angular_sep_deg(start_azel, end_azel, frame)
     return angular_distance / time_delta_s
 
-# --- FIX (#20): Replace Haversine with Geodesic (WGS84) ---
 def distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """
     Calculates the geodesic distance between two points using the WGS84 ellipsoid.
@@ -81,7 +78,6 @@ def _haversine_distance_km_spherical(lat1: float, lon1: float, lat2: float, lon2
     a = math.sin(dlat / 2)**2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon / 2)**2
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R_km * c
-# --- END FIX (#20) ---
 
 def get_sun_azel(timestamp: float, observer_loc: EarthLocation) -> tuple:
     """Gets the Sun's current Azimuth and Elevation."""
@@ -91,7 +87,6 @@ def get_sun_azel(timestamp: float, observer_loc: EarthLocation) -> tuple:
     sun_altaz = sun.transform_to(altaz_frame)
     return (sun_altaz.az.deg, sun_altaz.alt.deg)
 
-# --- FIX (#16): Always calculate plate scale ---
 def calculate_plate_scale() -> float:
     """Calculates the plate scale in arcsec/pixel from config."""
     cam_specs = CONFIG['camera_specs']
@@ -113,7 +108,6 @@ def calculate_plate_scale() -> float:
 
     # Plate Scale (arcsec/pixel) = (Pixel Size (microns) / Focal Length (mm)) * 206.265
     return (206.265 * effective_pixel_size_um) / focal_length_mm
-# --- END FIX (#16) ---
 
 def solve_intercept_time(current_az_el: tuple, target_azel_func, max_rate_deg_s: float, frame: AltAz, lo: float = 0.0, hi: float = 120.0) -> Optional[float]:
     """

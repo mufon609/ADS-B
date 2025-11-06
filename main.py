@@ -1,3 +1,4 @@
+#main.py
 """
 Main entry point: Monitors ADS-B data, processes flight paths, and tracks aircraft.
 """
@@ -7,9 +8,9 @@ import threading
 import os
 import math
 import json
-import queue  # <-- PATCH 3: Import queue
-import numpy as np  # <-- Import NumPy
-from typing import Optional, Callable  # <-- Import Optional and Callable
+import queue
+import numpy as np
+from typing import Optional, Callable
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from astropy.coordinates import EarthLocation
@@ -27,7 +28,6 @@ from aircraft_selector import (
     evaluate_manual_target_viability,  # detailed manual viability reasons
 )
 from hardware_control import IndiController
-# --- Import internal functions and loader from image_analyzer ---
 from image_analyzer import (
     _load_fits_data,
     _detect_aircraft_from_data,
@@ -36,19 +36,13 @@ from image_analyzer import (
 )
 # --- Keep original functions for dry run simulation if needed ---
 from image_analyzer import detect_aircraft
-# --- End Import Changes ---
-# --- FIX: Update import to use the new distance function name ---
 from coord_utils import (calculate_plate_scale, latlonalt_to_azel, distance_km,  # <-- USE THE NEW NAME
                          get_sun_azel, angular_sep_deg, angular_speed_deg_s, get_altaz_frame)
-# --- END FIX ---
-# --- FIX (#8): Import the new shutdown function ---
 from stack_orchestrator import shutdown as shutdown_stack_orchestrator
-# --- END FIX ---
 
 
 def _to_img_url(fs_path: str) -> str:
     """Converts a filesystem image path to its corresponding dashboard URL."""
-    # Ensure fs_path is a string before calling os.path.basename
     return "/images/" + os.path.basename(str(fs_path)) if fs_path else ""
 
 
@@ -208,17 +202,11 @@ class FileHandler(FileSystemEventHandler):
         self.manual_viability_info = None  # Cache last manual viability details for status
         self._scheduler_timer = None  # Timer for delayed scheduling
         self.preempt_requested = False  # Flag for preemptive track switching
-        # --- FIX: Add scheduler waiting flag (#6) ---
         self.is_scheduler_waiting = False
-        # --- END FIX ---
-
-        # --- PATCH 3: Add Capture Queue and Worker Thread ---
         self.capture_queue = queue.Queue()
         self.capture_worker_thread = threading.Thread(target=self._capture_worker_loop, daemon=True)
         self.capture_worker_thread.start()
-        # --- END PATCH 3 ---
 
-    # --- PATCH 3: Add Capture Worker Loop ---
     def _capture_worker_loop(self):
         """
         Worker thread that runs blocking captures from the queue.
@@ -235,9 +223,7 @@ class FileHandler(FileSystemEventHandler):
                 (icao, final_exp, seq_log_base,
                  captures_taken_so_far, status_payload_base) = job
 
-                # --- This is the blocking call ---
                 captured_paths = self.indi_controller.capture_sequence(icao, final_exp)
-                # --- End blocking call ---
 
                 if captured_paths:
                     # Update log and status *after* capture is complete
@@ -285,7 +271,6 @@ class FileHandler(FileSystemEventHandler):
                 traceback.print_exc()
 
         print("  Capture worker thread shutting down.")
-    # --- END PATCH 3 ---
 
     def process_file(self):
         """Processes aircraft.json, runs the scheduler, and manages state."""
@@ -370,9 +355,7 @@ class FileHandler(FileSystemEventHandler):
             lat, lon = data.get('lat'), data.get('lon')
             if lat is None or lon is None: continue
 
-            # --- FIX: Call the new distance function name ---
             dist_km = distance_km(obs_lat, obs_lon, lat, lon)
-            # --- END FIX ---
             dist_nm = dist_km / 1.852 if np.isfinite(dist_km) else None
 
             age_s = data.get('age_s')
@@ -415,10 +398,8 @@ class FileHandler(FileSystemEventHandler):
         write_status(status_payload)
 
         # --- Run Scheduler (if not already tracking and not waiting) ---
-        # --- FIX: Add check for is_scheduler_waiting (#6) ---
         if not self.current_track_icao and not self.is_scheduler_waiting:
             self._run_scheduler(candidates)
-        # --- END FIX ---
 
 
     def on_modified(self, event):
@@ -450,10 +431,8 @@ class FileHandler(FileSystemEventHandler):
 
     def _run_scheduler(self, candidates: Optional[list] = None):
         """Decides whether to start a new track or wait."""
-        # --- FIX: Prevent re-entry if already waiting (#6) ---
         if self.is_scheduler_waiting:
             return
-        # --- END FIX ---
 
         with self.track_lock:
             if self.current_track_icao:
@@ -528,9 +507,7 @@ class FileHandler(FileSystemEventHandler):
                     if not self._scheduler_timer or not self._scheduler_timer.is_alive():
                         retry_s = float(CONFIG.get('selection', {}).get('manual_retry_interval_s', 5.0))
                         print(f"  Scheduling retry for manual target in {retry_s}s.")
-                        # --- FIX: Set waiting flag for manual retry (#6) ---
                         self.is_scheduler_waiting = True
-                        # --- END FIX ---
                         self._scheduler_timer = threading.Timer(retry_s, self._run_scheduler_callback)  # Use callback
                         self._scheduler_timer.daemon = True
                         self._scheduler_timer.start()
@@ -557,9 +534,7 @@ class FileHandler(FileSystemEventHandler):
                 wait_duration = min(delay_needed, 30.0)
                 if self._scheduler_timer and self._scheduler_timer.is_alive():
                     self._scheduler_timer.cancel()
-                # --- FIX: Set waiting flag before starting timer (#6) ---
                 self.is_scheduler_waiting = True
-                # --- END FIX ---
                 self._scheduler_timer = threading.Timer(wait_duration, self._run_scheduler_callback)  # Use callback
                 self._scheduler_timer.daemon = True
                 self._scheduler_timer.start()
@@ -570,18 +545,14 @@ class FileHandler(FileSystemEventHandler):
             if self._scheduler_timer and self._scheduler_timer.is_alive():
                 self._scheduler_timer.cancel()
                 self._scheduler_timer = None
-            # --- FIX: Clear waiting flag as we are proceeding (#6) ---
             self.is_scheduler_waiting = False
-            # --- END FIX ---
 
             icao_to_track = target_to_consider['icao']
             latest_data = read_aircraft_data().get(icao_to_track)
             if not latest_data:
                 print(f"  Scheduler: No current data for {icao_to_track} just before starting track; deferring.")
                 if not self._scheduler_timer or not self._scheduler_timer.is_alive():
-                    # --- FIX: Set waiting flag for retry (#6) ---
                     self.is_scheduler_waiting = True
-                    # --- END FIX ---
                     self._scheduler_timer = threading.Timer(2.0, self._run_scheduler_callback)  # Retry in 2s, use callback
                     self._scheduler_timer.daemon = True
                     self._scheduler_timer.start()
@@ -603,12 +574,10 @@ class FileHandler(FileSystemEventHandler):
             )
             self.active_thread.start()
 
-    # --- FIX: Add a callback wrapper for the timer (#6) ---
     def _run_scheduler_callback(self):
         """Callback function used by the scheduler's timer."""
         self.is_scheduler_waiting = False  # Clear flag before running scheduler again
         self._run_scheduler()  # Now call the actual scheduler
-    # --- END FIX ---
 
 
     def track_aircraft(self, icao: str, aircraft_data: dict, start_state: dict):
@@ -695,7 +664,6 @@ class FileHandler(FileSystemEventHandler):
 
             # --- Main Guide Loop ---
             while True:
-                # --- FIX: Refresh ADS-B Data (Grok C1) ---
                 try:
                     latest_full_dict = read_aircraft_data()
                     if icao in latest_full_dict:
@@ -713,7 +681,6 @@ class FileHandler(FileSystemEventHandler):
                         break
                 except Exception as e:
                     print(f"  Track [{icao}]: Error refreshing ADS-B data: {e}. Continuing with previous data.")
-                # --- END FIX ---
 
                 iteration += 1
                 loop_start_time = time.time()
@@ -722,7 +689,6 @@ class FileHandler(FileSystemEventHandler):
                     print(f"  Track [{icao}]: Shutdown signaled, exiting guide loop.")
                     break
 
-                # --- FIX: Unify Dry Run Image Generation ---
                 guide_path = None
                 guide_data = None
                 if CONFIG['development']['dry_run']:
@@ -764,7 +730,6 @@ class FileHandler(FileSystemEventHandler):
                         if consecutive_losses >= max_losses: break
                         time.sleep(0.5);
                         continue
-                # --- END FIX ---
 
                 if guide_data is None:  # Handle case where guide_data failed to load/simulate
                     print(f"  Track [{icao}]: guide_data is None. Skipping frame.")
@@ -824,14 +789,10 @@ class FileHandler(FileSystemEventHandler):
 
                 guide_error_mag = max(abs(corrected_dx), abs(corrected_dy))
                 is_stable_np = guide_error_mag <= deadzone_px
-                # --- FIX: Cast np.bool_ to Python bool ---
                 is_stable = bool(is_stable_np)
-                # --- END FIX ---
 
-                # --- FIX: Force stability in dry run ---
                 if CONFIG['development']['dry_run']:
                     is_stable = True
-                # --- END FIX ---
 
                 now = time.time()
                 try:
@@ -867,9 +828,7 @@ class FileHandler(FileSystemEventHandler):
                     "image_vitals": {"sharpness": detection.get('sharpness'), "confidence": detection.get('confidence')},
                     "current_quality": round(current_quality, 3),
                     "current_range_km": round(current_range_km, 1) if np.isfinite(current_range_km) else None,
-                    # --- PATCH 3: Add captures_taken to status ---
                     "captures_taken": captures_taken
-                    # --- END PATCH 3 ---
                 }
                 status_payload.update(hardware_status)
                 write_status(status_payload)
@@ -878,7 +837,6 @@ class FileHandler(FileSystemEventHandler):
                 az_sign = calib_cfg.get('az_offset_sign', 1)
                 el_sign = calib_cfg.get('el_offset_sign', 1)
 
-                # --- FIX: Proportional Guiding (#18) ---
                 guide_params = CONFIG['capture'].get('guiding', {})
                 gain = float(guide_params.get('proportional_gain', 20.0))
                 min_p = int(guide_params.get('min_pulse_ms', 10))
@@ -888,7 +846,6 @@ class FileHandler(FileSystemEventHandler):
                     duration = int(abs(error_px) * gain)
                     return max(min_p, min(max_p, duration))
 
-                # --- END FIX ---
 
                 pulse_ms_x, pulse_ms_y = 0, 0  # Initialize pulse durations
                 if corrected_dy > deadzone_px:
@@ -954,7 +911,6 @@ class FileHandler(FileSystemEventHandler):
 
                     print(f"    - Final sequence exposure: {final_exp:.4f}s (Reason: {limit_reason})")
 
-                    # --- PATCH 3: Replace blocking call with queue.put() ---
                     last_seq_ts = time.time() # Set timestamp immediately
                     
                     # Create the log and status payloads here, in the guide thread
@@ -990,7 +946,6 @@ class FileHandler(FileSystemEventHandler):
                     status_update['captures_taken'] = captures_taken
                     status_update['sequence_count'] = 0 # Worker will set this
                     write_status(status_update) 
-                    # --- END PATCH 3 ---
 
                 loop_duration = time.time() - loop_start_time
                 sleep_time = max(0.01, 0.1 - loop_duration)
@@ -1007,7 +962,6 @@ class FileHandler(FileSystemEventHandler):
                 self.preempt_requested = False
 
             was_aborted_by_signal = self.shutdown_event.is_set()
-            # --- FIX: Removed the incorrect shutdown_event.clear() call (#7) ---
 
             final_status = {"mode": "idle", "icao": None}
             if was_aborted_by_signal and not was_preempted:

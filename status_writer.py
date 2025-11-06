@@ -7,13 +7,12 @@ import os
 import threading
 import time
 import tempfile
-import numpy as np # IMPORT NUMPY
+import numpy as np
 from config_loader import CONFIG, LOG_DIR
 
 _status_lock = threading.Lock()
 _current_status_cache: dict = {"mode": "initializing"}
 
-# --- FIX: Update NumPy type conversion for NumPy 2.0 ---
 def convert_numpy_types(obj):
     """Recursively converts NumPy types in a dict/list to standard Python types for JSON."""
     if isinstance(obj, dict):
@@ -44,7 +43,6 @@ def convert_numpy_types(obj):
         return None # Represent void as null or handle appropriately
     # Return object unchanged if not a NumPy type or container
     return obj
-# --- END FIX ---
 
 def write_status(status: dict):
     """

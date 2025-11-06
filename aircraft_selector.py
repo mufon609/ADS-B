@@ -22,12 +22,12 @@ from typing import Dict, Any, Tuple, List, Optional
 from astropy.coordinates import EarthLocation, AltAz
 from astropy.time import Time
 import astropy.units as u
-import numpy as np # Import numpy
+import numpy as np
 
 from coord_utils import (
     get_altaz_frame,
     latlonalt_to_azel,
-    distance_km,              # Use the new name
+    distance_km,
     get_sun_azel,
     solve_intercept_time,
     angular_sep_deg,
@@ -229,9 +229,6 @@ def select_aircraft(aircraft_dict: dict, current_mount_az_el: tuple) -> list:
     max_range_nm = float(sel_cfg.get('max_range_nm', 120.0))
     max_range_km = max_range_nm * 1.852 # Convert NM to KM
     min_alt_ft   = float(sel_cfg.get('min_altitude_ft', 1000.0))
-    # --- REVERT: Remove NUCp Threshold ---
-    # min_nucp     = int(sel_cfg.get('min_nucp', 7)) # <- REMOVED
-    # --- END REVERT ---
 
 
     for icao, data in aircraft_dict.items():
@@ -240,11 +237,6 @@ def select_aircraft(aircraft_dict: dict, current_mount_az_el: tuple) -> list:
         if alt is None or alt < min_alt_ft:
             continue
 
-        # --- REVERT: Remove NUCp Filter ---
-        # nucp = data.get('nucp', 0) # <- REMOVED (data_reader no longer adds it)
-        # if nucp < min_nucp:       # <- REMOVED
-        #     continue              # <- REMOVED
-        # --- END REVERT ---
 
         # Pre-filter range (if current position available)
         lat = data.get('lat')
@@ -308,9 +300,6 @@ def evaluate_manual_target_viability(
     min_el_sel       = float(sel_cfg.get('min_elevation_deg', 10.0))
     min_sun_sep_deg  = float(sel_cfg.get('min_sun_separation_deg', 15.0))
     max_range_nm_cfg = float(sel_cfg.get('max_range_nm', 120.0))
-    # --- REVERT: Remove NUCp Threshold ---
-    # min_nucp_sel     = int(sel_cfg.get('min_nucp', 7)) # <- REMOVED
-    # --- END REVERT ---
 
     hw_cfg = CONFIG.get('hardware', {})
     min_el_hw  = float(hw_cfg.get('min_el_deg', min_el_sel)) # Use hardware min if stricter
@@ -335,12 +324,6 @@ def evaluate_manual_target_viability(
     else:
          reasons.append("no valid age ('age_s' missing or invalid)")
 
-    # --- REVERT: Remove NUCp Check ---
-    # nucp = ac.get('nucp', 0) # <- REMOVED (data_reader no longer provides it)
-    # details["nucp"] = nucp  # <- REMOVED
-    # if nucp < min_nucp_sel: # <- REMOVED
-    #     reasons.append(f"low GPS quality (NUCp {nucp} < {min_nucp_sel})") # <- REMOVED
-    # --- END REVERT ---
 
     # Check for Position Data
     lat = ac.get("lat")
@@ -416,8 +399,5 @@ def evaluate_manual_target_viability(
         "max_elevation_deg_hw": max_el_hw,
         "min_sun_separation_deg": min_sun_sep_deg,
         "max_range_nm": max_range_nm_cfg,
-        # --- REVERT: Remove NUCp from thresholds ---
-        # "min_nucp": min_nucp_sel, # <- REMOVED
-        # --- END REVERT ---
     }
     return ok, reasons, details

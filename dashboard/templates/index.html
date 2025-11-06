@@ -91,14 +91,6 @@
     </div>
   </article>
 
-  <!-- --- FIX: Removed the redundant "Last Stacked Image" panel ---
-  <article>
-    <h3>Last Stacked Image</h3>
-    <div class="imgbox"><img id="stackedImg" alt="Stacked preview" style="display:none;"/></div>
-    <div id="captureInfo" class="mono muted">—</div>
-    <div class="mono">Frames: <span id="sequenceCount">—</span> / Exp: <span id="sequenceExp">—</span>s</div>
-  </article>
-  -->
 </section>
 
 <!-- Latest multi-variant stacks -->
@@ -278,24 +270,13 @@ function updateDashboard(s) {
     }
     q('#guideInfo').textContent = s.last_guide_file || '—';
     
-    // --- FIX: Remove JS for the deleted "Last Stacked Image" panel ---
-    // const stackedEl = q('#stackedImg');
-    // const stackedPreviewPath = "{{ config.stacking.preview_path }}".replace(/^logs\//, "/logs/");
-    // stackedEl.onload = () => { stackedEl.style.display = 'block'; };
-    // stackedEl.onerror = () => { stackedEl.style.display = 'none'; };
-    // stackedEl.src = stackedPreviewPath + '?t=' + Date.now();
-    // q('#captureInfo').textContent = s.last_capture_file || '—';
-    // --- END FIX ---
 
-    // --- FIX: Update this info (which was in the old panel) ---
     q('#sequenceCount').textContent = s.sequence_count || '—';
     q('#sequenceExp').textContent = has(s.sequence_exposure_s) ? fmt(s.sequence_exposure_s, 3) : '—';
-    // --- END FIX ---
     
     q('#offsetXY').textContent = has(s.guide_offset_px) ? `dx=${fmt(s.guide_offset_px.dx)}, dy=${fmt(s.guide_offset_px.dy)} px` : '—';
 }
 
-/* ------------------- New: Multi-variant latest stack rendering ------------------- */
 let lastStackSeqId = null;
 let lastImgUrls    = { mean:null, robust:null, anomaly:null };
 let lastLinkUrls   = {

@@ -1,3 +1,4 @@
+#calibrate_camera.py
 """
 A script to be run at night to precisely measure camera properties
 using plate-solving with ASTAP.

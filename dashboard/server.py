@@ -11,10 +11,9 @@ import json
 import tempfile
 import time
 from typing import Optional, Dict, List, Tuple
-import asyncio  # IMPORTED
-import uvicorn # Added for running the server
+import asyncio
+import uvicorn
 
-# Assuming config_loader is in the parent directory
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config_loader import CONFIG, LOG_DIR
@@ -22,10 +21,9 @@ from config_loader import CONFIG, LOG_DIR
 IMAGES_DIR = os.path.join(LOG_DIR, 'images')
 STACK_ROOT = os.path.join(LOG_DIR, 'stack')
 os.makedirs(IMAGES_DIR, exist_ok=True)
-os.makedirs(STACK_ROOT, exist_ok=True) # Ensure STACK_ROOT exists too
+os.makedirs(STACK_ROOT, exist_ok=True)
 
 app = FastAPI()
-# Mounting StaticFiles is generally safe from path traversal due to checks
 app.mount("/images", StaticFiles(directory=IMAGES_DIR), name="images")
 app.mount("/logs", StaticFiles(directory=LOG_DIR), name="logs")
 
@@ -205,8 +203,6 @@ async def index(request: Request):
     # Pass only necessary config parts to template if desired
     return template.render(request=request, config=CONFIG)
 
-# --- START: PATCH 1 (FastAPI Version) ---
-# This block replaces the broken Flask code
 @app.get("/api/status")
 async def api_get_status():
     """Serves the latest status.json content."""
@@ -224,16 +220,13 @@ async def api_get_status():
         headers={"Cache-Control": "no-store"},
         status_code=status_code
     )
-# --- END: PATCH 1 (FastAPI Version) ---
 
 @app.post("/command/track", response_class=RedirectResponse)
 async def command_track(icao: str = Form(...)):
     """Receives and validates a command to track a specific ICAO."""
     icao = (icao or "").strip().lower()
     if icao and len(icao) <= 6: # Basic validation
-        # --- FIX (#10): Move blocking I/O to a thread ---
         await asyncio.to_thread(write_command, {"track_icao": icao})
-        # --- END FIX ---
     else:
         print(f"Warning: Invalid ICAO received in track command: '{icao}'")
     return RedirectResponse("/", status_code=303) # Redirect back to dashboard
@@ -241,17 +234,13 @@ async def command_track(icao: str = Form(...)):
 @app.post("/command/abort", response_class=RedirectResponse)
 async def command_abort():
     """Receives a command to abort the current track."""
-    # --- FIX (#10): Move blocking I/O to a thread ---
     await asyncio.to_thread(write_command, {"command": "abort_track"})
-    # --- END FIX ---
     return RedirectResponse("/", status_code=303)
 
 @app.post("/command/park", response_class=RedirectResponse)
 async def command_park():
     """Receives a command to park the mount."""
-    # --- FIX (#10): Move blocking I/O to a thread ---
     await asyncio.to_thread(write_command, {"command": "park_mount"})
-    # --- END FIX ---
     return RedirectResponse("/", status_code=303)
 
 # -----------------------
@@ -263,9 +252,7 @@ async def api_latest_stack():
     """
     Returns the most recent stacked sequence with product URLs and manifest/QC.
     """
-    # --- FIX (#10): Move blocking I/O to a thread ---
     latest = await asyncio.to_thread(_find_latest_sequence_dir)
-    # --- END FIX ---
 
     if not latest:
         return JSONResponse(
@@ -300,9 +287,7 @@ async def api_recent_stacks(icao: str, limit: int = 5):
     icao = (icao or "").strip().lower()
     limit = max(1, min(limit, 50)) # Clamp limit
 
-    # --- FIX (#10): Move blocking I/O to a thread ---
     seq_dirs = await asyncio.to_thread(_find_sequence_dirs_for_icao, icao)
-    # --- END FIX ---
 
     # Concurrently fetch data for the limited sequence directories
     async def get_item_data(seq_dir):

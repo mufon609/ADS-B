@@ -1,3 +1,4 @@
+#data_reader.py
 """
 Module for reading and parsing aircraft.json from dump1090.
 """
@@ -106,9 +107,6 @@ def read_aircraft_data() -> dict:
             vr = _to_float(ac.get('baro_rate')) or _to_float(ac.get('vert_rate')) # Fallback for vertical rate
             flight = str(ac.get('flight') or '').strip()
 
-            # --- REVERT: Remove NUCp Reading ---
-            # nucp = int(ac.get('nucp', 0) or 0) # <- REMOVED
-            # --- END REVERT ---
 
             # Combined validation check
             is_valid = True
@@ -142,9 +140,6 @@ def read_aircraft_data() -> dict:
                 'timestamp': sample_time, # Absolute epoch time of measurement
                 'flight': flight,
                 'age_s': age,          # Age relative to file_time
-                # --- REVERT: Remove NUCp Field ---
-                # 'nucp': nucp # <- REMOVED
-                # --- END REVERT ---
             }
             processed_count += 1
 

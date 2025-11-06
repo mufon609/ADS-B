@@ -17,7 +17,6 @@ import cv2
 from astropy.io import fits
 from astropy.stats import sigma_clipped_stats # More robust sigma clipping available
 
-# --- Import necessary internal functions from image_analyzer ---
 from image_analyzer import _load_fits_data, _detect_aircraft_from_data
 
 
@@ -170,12 +169,10 @@ def _sigma_clipped_mean(volume: np.ndarray, clip_z: float = 3.0, max_iters: int 
 
     # Use astropy's sigma_clipped_stats along the frame axis (axis=0)
     try:
-        # --- FIX: Use 'mask=None' as hinted by your log ---
         mean_stack, median_unused, std_unused = sigma_clipped_stats(
             volume, sigma=clip_z, maxiters=max_iters, axis=0,
-            cenfunc='median', stdfunc='mad_std', mask=None # <-- FIX HERE
+            cenfunc='median', stdfunc='mad_std', mask=None
         )
-        # --- END FIX ---
     except TypeError as e:
          # Fallback to 'return_masked_array' if 'mask' also fails
          if "got an unexpected keyword argument 'mask'" in str(e):
@@ -310,11 +307,9 @@ def stack_images_multi(image_paths: List[str], output_dir: str, params: Dict) ->
         robust_png_path = os.path.join(output_dir, "stack_robust.png")
         anomaly_png_path = os.path.join(output_dir, "stack_anomaly.png")
 
-        # --- FIX (#13): Clip data before casting to uint16 ---
         # Clip mean and robust stacks to valid uint16 range (0-65535)
         mean_stack_u16 = np.clip(np.nan_to_num(mean_stack, nan=0), 0, 65535).astype(np.uint16)
         robust_stack_u16 = np.clip(np.nan_to_num(robust_stack, nan=0), 0, 65535).astype(np.uint16)
-        # --- END FIX (#13) ---
 
         # Scale anomaly map for saving (e.g., to uint16) - Use robust scaling
         anomaly_finite = anomaly[np.isfinite(anomaly)]

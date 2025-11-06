@@ -1,10 +1,14 @@
+#hardware_control.py
+"""
+Hardware Control module:
+"""
 import PyIndi
 import time
 import os
 import numpy as np
 import cv2
 import threading
-import queue # Added for Bug #17
+import queue
 from typing import List, Optional, Callable
 from storage import append_to_json
 from config_loader import CONFIG, LOG_DIR
@@ -29,7 +33,6 @@ class IndiController(PyIndi.BaseClient):
         self._received_blobs = {}
         self._blob_name = "CCD1" # Default
 
-        # --- FIX: Modify Dry Run Logic ---
         is_dry_run = CONFIG['development']['dry_run']
 
         if is_dry_run:
@@ -47,7 +50,7 @@ class IndiController(PyIndi.BaseClient):
             if not self.connectServer():
                 raise ConnectionError("Failed to connect to INDI server")
             print("Waiting for devices...")
-            time.sleep(5) # Increased wait
+            time.sleep(5)
 
             self.mount = self.getDevice(CONFIG['hardware']['mount_device_name'])
             self.camera = self.getDevice(CONFIG['hardware']['camera_device_name'])
@@ -136,7 +139,6 @@ class IndiController(PyIndi.BaseClient):
                          print(f"  - Set Camera: Offset to {offset_val}.")
 
             print("---------------------------------------")
-        # --- END FIX ---
 
         # Observer location is needed in both modes for coordinate conversions
         obs_cfg = CONFIG['observer']
@@ -163,7 +165,7 @@ class IndiController(PyIndi.BaseClient):
              print(f"Warning: Widget '{widget_name}' not found in switch vector '{switch_vector.name}'.")
 
 
-    def _wait_prop(self, get_func, dev, name, timeout=5.0): # Increased default timeout
+    def _wait_prop(self, get_func, dev, name, timeout=5.0):
         """Waits for an INDI property to become available."""
         if not dev: return None # Handle case where device itself is None
         t0 = time.time()
@@ -182,7 +184,6 @@ class IndiController(PyIndi.BaseClient):
     def _wait_switch(self, dev, name, timeout=5.0):
         return self._wait_prop(PyIndi.BaseDevice.getSwitch, dev, name, timeout)
 
-    # --- REMOVED _drain_blobs as it's replaced by the queue system (#17) ---
 
     def _detect_ccd_blob_name(self) -> str:
         """Detects the likely name of the primary image BLOB property."""
@@ -205,7 +206,6 @@ class IndiController(PyIndi.BaseClient):
         print("  - Warning: Could not detect primary BLOB property, falling back to 'CCD1'.")
         return "CCD1"
 
-    # --- FIX (#17): Implement newBLOB handler ---
     def newBLOB(self, bp):
         """Handles incoming BLOB data from the INDI server."""
         is_expected_blob = (bp.name == self._blob_name) or (self._blob_name == "CCD1" and bp.name == "CCD1")
@@ -223,7 +223,6 @@ class IndiController(PyIndi.BaseClient):
             except queue.Empty: print("  - Warning: Received BLOB but no exposure was pending. Discarding.")
             except Exception as e: print(f"  - Error processing BLOB in newBLOB handler: {e}")
         PyIndi.BaseClient.newBLOB(self, bp)
-    # --- END FIX ---
 
     def get_hardware_status(self) -> dict:
         status = {}
@@ -691,7 +690,6 @@ class IndiController(PyIndi.BaseClient):
             print(f"[DRY RUN] Simulating capture of: {os.path.basename(save_path)}")
             png_path = os.path.splitext(save_path)[0] + ".png"; h = CONFIG.get('camera_specs', {}).get('resolution_height_px', 480); w = CONFIG.get('camera_specs', {}).get('resolution_width_px', 640)
 
-            # --- FIX: Create FLAT uint16 base, then add text ---
             # 1. Create uint16 base image
             fits_baseline_value = 1000 # Example: low background value
             img_fits_uint16 = np.full((h, w), fits_baseline_value, np.uint16)
@@ -700,7 +698,6 @@ class IndiController(PyIndi.BaseClient):
             text_color = 60000; font_scale = 0.8; font_thickness = 2
             cv2.putText(img_fits_uint16, "DRY RUN", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, font_scale, text_color, font_thickness)
             
-            # --- FIX: Correct text parsing logic ---
             try: # Add dynamic text (e.g., frame number)
                  basename_no_ext = os.path.splitext(os.path.basename(save_path))[0]
                  parts = basename_no_ext.split('_')
@@ -711,7 +708,6 @@ class IndiController(PyIndi.BaseClient):
                      raise IndexError("Filename format not as expected")
             except Exception: # Fallback
                  dynamic_text = os.path.basename(save_path)[-20:-5] 
-            # --- END FIX ---
             cv2.putText(img_fits_uint16, dynamic_text, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.4, text_color, 1)
 
             # 3. Save the uint16 array (flat background + text) as FITS
@@ -725,7 +721,6 @@ class IndiController(PyIndi.BaseClient):
                 img_preview_8bit = cv2.normalize(img_fits_uint16, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
                 cv2.imwrite(png_path, img_preview_8bit)
             except Exception as e: print(f"[DRY RUN] Failed to write dummy PNG {png_path}: {e}")
-            # --- END FIX ---
 
             return save_path
 

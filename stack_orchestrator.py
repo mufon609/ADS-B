@@ -22,9 +22,7 @@ from astropy.io import fits
 from config_loader import CONFIG, LOG_DIR
 from stacker import stack_images
 
-# Try to use the project's PNG preview helper if available
 try:
-    # This helper is used by capture_image, but stacker generates its own PNGs
     from image_analyzer import save_png_preview as _save_png_preview_helper
 except Exception:
     _save_png_preview_helper = None
@@ -38,10 +36,6 @@ def _ensure_executor():
     if _executor is None:
         _executor = ThreadPoolExecutor(max_workers=1)
 
-# --- REMOVED _fits_to_png ---
-# This was only used by the global preview publish logic, which is being removed.
-# stacker.py now handles its own PNG creation.
-# --- END REMOVED ---
 
 def _resolve_preview_dst(preview_dst_cfg: str) -> str:
     """
@@ -56,17 +50,6 @@ def _resolve_preview_dst(preview_dst_cfg: str) -> str:
         return os.path.join(LOG_DIR, rest)
     return os.path.abspath(preview_dst_cfg)
 
-# --- REMOVED _make_sequence_png_from_fits ---
-# This was part of the old global preview logic.
-# --- END REMOVED ---
-
-# --- REMOVED _publish_preview_from_fits ---
-# This was part of the old global preview logic.
-# --- END REMOVED ---
-
-# --- REMOVED _publish_preview_from_png ---
-# This was part of the old global preview logic.
-# --- END REMOVED ---
 
 def _rel_to_logs_url(path: str) -> Optional[str]:
     """Map an absolute path under LOG_DIR to a /logs/... URL for the manifest."""
@@ -120,9 +103,6 @@ def _run_stacking_pipeline(sequence_id: str, image_paths: List[str], capture_met
         # inside the 'out_dir'
         master_fits, qc = stack_images(image_paths, out_dir, params) # master_fits is robust stack path
 
-        # --- FIX: Removed all global preview publishing logic ---
-        # The dashboard now polls /api/latest_stack and gets paths
-        # directly from the sequence directory.
         
         if not master_fits or qc.get("error"):
             print(f"  Orchestrator: Stacking failed for sequence {sequence_id}. Reason: {qc.get('error', 'Unknown')}")
@@ -131,7 +111,6 @@ def _run_stacking_pipeline(sequence_id: str, image_paths: List[str], capture_met
         else:
             print(f"  Orchestrator: Stacking complete for sequence {sequence_id}.")
             qc["status"] = qc.get("status", "success") # Use status from stacker if present
-        # --- END FIX ---
 
         # Log a manifest for this sequence inside its directory
         manifest = {
@@ -142,7 +121,6 @@ def _run_stacking_pipeline(sequence_id: str, image_paths: List[str], capture_met
             "stack_params_used": params,
             "qc": qc,
             "outputs": {
-                # --- FIX: Update manifest outputs to use relative URLs ---
                 "master_fits": _rel_to_logs_url(master_fits) if master_fits else None, # This is stack_robust.fits
                 "sequence_mean_png": _rel_to_logs_url(os.path.join(out_dir, "stack_mean.png")),
                 "sequence_robust_png": _rel_to_logs_url(os.path.join(out_dir, "stack_robust.png")),
@@ -150,7 +128,6 @@ def _run_stacking_pipeline(sequence_id: str, image_paths: List[str], capture_met
                 "sequence_mean_fits": _rel_to_logs_url(os.path.join(out_dir, "stack_mean.fits")),
                 "sequence_robust_fits": _rel_to_logs_url(os.path.join(out_dir, "stack_robust.fits")),
                 "sequence_anomaly_fits": _rel_to_logs_url(os.path.join(out_dir, "stack_anomaly.fits")),
-                # --- END FIX ---
             },
             "timestamp": int(time.time())
         }

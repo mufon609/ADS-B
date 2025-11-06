@@ -1,0 +1,41 @@
+{
+  "sequence_id": "ad444d_1762454730",
+  "icao": "ad444d",
+  "paths": [
+    "/home/dump/Desktop/project/gemini/logs/images/capture_ad444d_1762454729151099759_1_of_5.fits",
+    "/home/dump/Desktop/project/gemini/logs/images/capture_ad444d_1762454729598991965_2_of_5.fits",
+    "/home/dump/Desktop/project/gemini/logs/images/capture_ad444d_1762454729707257206_3_of_5.fits",
+    "/home/dump/Desktop/project/gemini/logs/images/capture_ad444d_1762454730015629898_4_of_5.fits",
+    "/home/dump/Desktop/project/gemini/logs/images/capture_ad444d_1762454730246071523_5_of_5.fits"
+  ],
+  "capture_meta": {
+    "gain": 100,
+    "offset": 50,
+    "binning": {
+      "x": 1,
+      "y": 1
+    }
+  },
+  "stack_params_used": {
+    "enabled": true
+  },
+  "qc": {
+    "n_frames_input": 5,
+    "n_frames_loaded_detected": 5,
+    "n_frames_aligned": 5,
+    "sigma_clip_z": 3.0,
+    "clipped_fraction": 0.0,
+    "anomaly_mask_radius_px": 20,
+    "status": "success"
+  },
+  "outputs": {
+    "master_fits": "/logs/stack/ad444d/ad444d_1762454730/stack_robust.fits",
+    "sequence_mean_png": "/logs/stack/ad444d/ad444d_1762454730/stack_mean.png",
+    "sequence_robust_png": "/logs/stack/ad444d/ad444d_1762454730/stack_robust.png",
+    "sequence_anomaly_png": "/logs/stack/ad444d/ad444d_1762454730/stack_anomaly.png",
+    "sequence_mean_fits": "/logs/stack/ad444d/ad444d_1762454730/stack_mean.fits",
+    "sequence_robust_fits": "/logs/stack/ad444d/ad444d_1762454730/stack_robust.fits",
+    "sequence_anomaly_fits": "/logs/stack/ad444d/ad444d_1762454730/stack_anomaly.fits"
+  },
+  "timestamp": 1762454760
+}
