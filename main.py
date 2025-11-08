@@ -207,6 +207,10 @@ class FileHandler(FileSystemEventHandler):
         self.capture_worker_thread = threading.Thread(target=self._capture_worker_loop, daemon=True)
         self.capture_worker_thread.start()
 
+        # Shared counter for the number of images captured for the current track.
+        # This counter is protected by track_lock and reset whenever a new track begins.
+        self.captures_taken = 0
+
     def _capture_worker_loop(self):
         """
         Worker thread that runs blocking captures from the queue.
@@ -243,22 +247,11 @@ class FileHandler(FileSystemEventHandler):
                         if os.path.exists(last_raw_png_path):
                             status_update["capture_png"] = _to_img_url(last_raw_png_path)
                     
-                    # Update captures_taken on the main handler for the next loop
-                    # Note: This is a potential race condition, but is acceptable
-                    # for a simple counter. A lock would be more robust.
-                    self.track_lock.acquire()
-                    if self.current_track_icao == icao: # Only update if still on same target
-                         # This is tricky. We'll pass captures_taken back via status write
-                         # The main loop will read it. Let's just write status.
-                         pass
-                    self.track_lock.release()
-                    
-                    # We can't update captures_taken in the main thread easily.
-                    # We will just write the status. The main thread will
-                    # overwrite this with its own status, but the capture
-                    # counter in the *dashboard* will be briefly updated.
-                    # A better fix involves a shared state object, but
-                    # this is the minimal change.
+                    # Update the shared captures_taken counter atomically.
+                    with self.track_lock:
+                        if self.current_track_icao == icao:
+                            self.captures_taken = captures_taken
+                    # Write status with updated capture count.
                     write_status(status_update)
 
             except queue.Empty:
@@ -561,6 +554,10 @@ class FileHandler(FileSystemEventHandler):
             self.current_track_icao = icao_to_track
             self.current_track_ev = target_to_consider['ev']
             self.shutdown_event.clear()
+
+            # Reset captures_taken for the new track.  Already inside track_lock from outer context.
+            self.captures_taken = 0
+
             write_status({"mode": "acquiring", "icao": icao_to_track})
             print(f"  Scheduler: Starting track thread for {icao_to_track} (EV: {target_to_consider['ev']:.1f})")
 
@@ -651,7 +648,9 @@ class FileHandler(FileSystemEventHandler):
                 timing_error_s = abs(start_state.get('time', time.time()) - (time.time() + slew_duration_s)) * 0.5
                 simulated_detection_result = detect_aircraft(None, sim_initial_error_s=timing_error_s)
 
-            captures_taken = 0
+            # Initialize the local capture counter from the shared state.
+            with self.track_lock:
+                captures_taken = self.captures_taken
             consecutive_losses = 0
             iteration = 0
             last_seq_ts = 0.0
@@ -929,8 +928,8 @@ class FileHandler(FileSystemEventHandler):
                     status_payload_base = {
                         "sequence_exposure_s": float(final_exp),
                         "sequence_meta": {"ang_speed_deg_s": float(ang_speed),
-                                          "target_blur_px_limit": float(blur_px_limit),
-                                          "exposure_limit_reason": limit_reason}
+                                           "target_blur_px_limit": float(blur_px_limit),
+                                           "exposure_limit_reason": limit_reason}
                     }
 
                     # Put the job on the queue for the worker
@@ -939,7 +938,9 @@ class FileHandler(FileSystemEventHandler):
                     
                     # Update captures_taken *immediately* in this thread
                     # The worker will add the *real* count later
-                    captures_taken += int(CONFIG['capture'].get('num_sequence_images', 5))
+                    with self.track_lock:
+                        self.captures_taken += int(CONFIG['capture'].get('num_sequence_images', 5))
+                        captures_taken = self.captures_taken
                     
                     # Write status immediately, worker will update it again
                     status_update = status_payload_base.copy()
@@ -1052,4 +1053,3 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"Warning: Error during stack orchestrator shutdown: {e}")
         print("Program terminated.")
-
