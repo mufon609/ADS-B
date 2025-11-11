@@ -1,31 +1,69 @@
 {
   "mode": "idle",
-  "queue": [],
-  "track_candidates": [],
+  "queue": [
+    {
+      "icao": "a81761",
+      "ev": 0.22812092279081578,
+      "intercept_time": 19.34505343437195,
+      "slew_time": 19.34505343437195,
+      "start_state": {
+        "az": 102.35165822719965,
+        "el": 11.66210205741708,
+        "sun_az": 141.7018835763153,
+        "sun_el": 22.92772370430385,
+        "time": 1762870506.346414,
+        "lat": 39.991054168733264,
+        "lon": -74.04502975470224,
+        "range_km": 43.83639991308418,
+        "sun_sep": 39.08256071728724,
+        "ang_speed": 0.2641799044119416
+      }
+    }
+  ],
+  "track_candidates": [
+    {
+      "icao": "a81761",
+      "ev": 0.22812092279081578,
+      "intercept_time": 19.34505343437195,
+      "slew_time": 19.34505343437195,
+      "start_state": {
+        "az": 102.35165822719965,
+        "el": 11.66210205741708,
+        "sun_az": 141.7018835763153,
+        "sun_el": 22.92772370430385,
+        "time": 1762870506.346414,
+        "lat": 39.991054168733264,
+        "lon": -74.04502975470224,
+        "range_km": 43.83639991308418,
+        "sun_sep": 39.08256071728724,
+        "ang_speed": 0.2641799044119416
+      }
+    }
+  ],
   "all_aircraft": [
+    {
+      "icao": "ad444d",
+      "flight": "JBU772",
+      "alt": 31820.0,
+      "gs": 500.0,
+      "track": 45.7,
+      "dist_nm": 1.7737201043883273
+    },
     {
       "icao": "a29982",
       "flight": "N/A",
-      "alt": 9847.0,
+      "alt": 5657.0,
       "gs": 73.8,
-      "track": 69.2,
-      "dist_nm": 25.582105399875317
+      "track": 11.2,
+      "dist_nm": 24.33249307540346
     },
     {
       "icao": "a81761",
       "flight": "N/A",
-      "alt": 29600.0,
+      "alt": 30567.0,
       "gs": 460.0,
       "track": 222.0,
-      "dist_nm": 30.397096695124198
-    },
-    {
-      "icao": "ad444d",
-      "flight": "JBU772",
-      "alt": 31739.0,
-      "gs": 500.0,
-      "track": 45.7,
-      "dist_nm": 38.8475370433
+      "dist_nm": 25.360947655144685
     }
   ],
   "observer_loc": {
@@ -45,8 +83,8 @@
     }
   },
   "mount_az_el": [
-    168.5790453377014,
-    10.363117538920038
+    222.48521073961757,
+    15.485495989597826
   ],
   "camera_temp": -10.1,
   "camera_cooler_power": 45.5,
@@ -59,50 +97,50 @@
   },
   "camera_gain": 100,
   "camera_offset": 50,
-  "updated_at": 1762629732.7486112,
+  "updated_at": 1762870482.7916136,
   "icao": null,
   "target_az_el": [
-    168.8547480538293,
-    10.324371007863844
+    222.42535330048804,
+    15.871502832887042
   ],
-  "autofocus_alt_ft": 29813.0,
-  "iteration": 4,
+  "autofocus_alt_ft": 31853.0,
+  "iteration": 48,
   "guide_offset_px": {
-    "dx": 3.703442051885304,
-    "dy": 1.0408179058119913
+    "dx": 0.18954001532279108,
+    "dy": 0.17487493770431684
   },
   "stable": true,
-  "last_guide_png": "/images/snap_a81761_g4_1762629689670087859.png",
-  "last_guide_file": "snap_a81761_g4_1762629689670087859.fits",
+  "last_guide_png": "/images/snap_ad444d_g48_1762870410419232293.png",
+  "last_guide_file": "snap_ad444d_g48_1762870410419232293.fits",
   "target_details": {
-    "lat": 39.63671697265414,
-    "lon": -74.46057159859392,
-    "alt": 29737.172792434692,
-    "flight": "N/A",
-    "gs": 460.0,
-    "track": 222.0
+    "lat": 39.93544752536398,
+    "lon": -74.70649516753829,
+    "alt": 31765.0,
+    "flight": "JBU772",
+    "gs": 500.0,
+    "track": 45.7
   },
   "sun_pos": {
-    "az": 221.48514159079053,
-    "el": 22.073448905985146
+    "az": 141.34542483792683,
+    "el": 22.738686519861947
   },
-  "sun_sep_target_deg": 49.75669293398101,
-  "sun_sep_mount_deg": 51.87356966095606,
+  "sun_sep_target_deg": 70.98607801673717,
+  "sun_sep_mount_deg": 76.10771204400041,
   "image_vitals": {
     "sharpness": 60.0,
     "confidence": 0.95
   },
-  "current_quality": 0.479,
-  "current_range_km": 49.6,
-  "captures_taken": 20,
+  "current_quality": 0.476,
+  "current_range_km": 21.0,
+  "captures_taken": 55,
   "sequence_exposure_s": 0.01,
   "sequence_meta": {
-    "ang_speed_deg_s": 0.2090723548277406,
+    "ang_speed_deg_s": 0.22609736758390123,
     "target_blur_px_limit": 1.0,
     "exposure_limit_reason": "config_min (0.010s)"
   },
   "sequence_count": 5,
-  "last_capture_file": "capture_a81761_1762629714016888709_5_of_5.fits",
-  "capture_png": "/images/capture_a81761_1762629714016888709_5_of_5.png",
+  "last_capture_file": "capture_ad444d_1762870410069162479_5_of_5.fits",
+  "capture_png": "/images/capture_ad444d_1762870410069162479_5_of_5.png",
   "manual_target": null
 }

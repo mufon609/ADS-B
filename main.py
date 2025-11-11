@@ -38,7 +38,7 @@ from image_analyzer import (
 from image_analyzer import detect_aircraft
 from coord_utils import (calculate_plate_scale, latlonalt_to_azel, distance_km,  # <-- USE THE NEW NAME
                          get_sun_azel, angular_sep_deg, angular_speed_deg_s, get_altaz_frame)
-from stack_orchestrator import shutdown as shutdown_stack_orchestrator
+from stack_orchestrator import shutdown as shutdown_stack_orchestrator, request_shutdown
 
 
 def _to_img_url(fs_path: str) -> str:
@@ -391,7 +391,8 @@ class FileHandler(FileSystemEventHandler):
         write_status(status_payload)
 
         # --- Run Scheduler (if not already tracking and not waiting) ---
-        if not self.current_track_icao and not self.is_scheduler_waiting:
+        # Do not invoke the scheduler if a shutdown has been requested
+        if not self.shutdown_event.is_set() and not self.current_track_icao and not self.is_scheduler_waiting:
             self._run_scheduler(candidates)
 
 
@@ -424,10 +425,17 @@ class FileHandler(FileSystemEventHandler):
 
     def _run_scheduler(self, candidates: Optional[list] = None):
         """Decides whether to start a new track or wait."""
+        # Do not schedule new tracks during shutdown
+        if self.shutdown_event.is_set():
+            # Skip scheduling entirely if the system is shutting down
+            return
         if self.is_scheduler_waiting:
             return
 
         with self.track_lock:
+            # Check again inside the lock to avoid races
+            if self.shutdown_event.is_set():
+                return
             if self.current_track_icao:
                 return
 
@@ -555,7 +563,8 @@ class FileHandler(FileSystemEventHandler):
             self.current_track_ev = target_to_consider['ev']
             self.shutdown_event.clear()
 
-            # Reset captures_taken for the new track.  Already inside track_lock from outer context.
+            # Reset captures_taken for the new track.  Because we're already under track_lock at
+            # the start of this function, we do not acquire it again here.
             self.captures_taken = 0
 
             write_status({"mode": "acquiring", "icao": icao_to_track})
@@ -573,8 +582,12 @@ class FileHandler(FileSystemEventHandler):
 
     def _run_scheduler_callback(self):
         """Callback function used by the scheduler's timer."""
+        # If shutdown has been signaled, do not invoke the scheduler again
         self.is_scheduler_waiting = False  # Clear flag before running scheduler again
-        self._run_scheduler()  # Now call the actual scheduler
+        if self.shutdown_event.is_set():
+            return
+        # Now call the actual scheduler
+        self._run_scheduler()
 
 
     def track_aircraft(self, icao: str, aircraft_data: dict, start_state: dict):
@@ -876,6 +889,9 @@ class FileHandler(FileSystemEventHandler):
 
                 now = time.time()
                 if is_stable and (now - last_seq_ts) > min_sequence_interval_s:
+                    # Before scheduling a new sequence, ensure we are not shutting down
+                    if self.shutdown_event.is_set():
+                        break
                     print(f"  Track [{icao}]: Guiding stable. Capturing sequence...")
                     capture_cfg = CONFIG['capture']
                     base_exposure = float(capture_cfg.get('sequence_exposure_s', 0.5))
@@ -932,6 +948,10 @@ class FileHandler(FileSystemEventHandler):
                                            "exposure_limit_reason": limit_reason}
                     }
 
+                    # Do not queue new sequences if shutdown has been signaled
+                    if self.shutdown_event.is_set():
+                        print(f"  Track [{icao}]: Shutdown signaled, skipping sequence scheduling.")
+                        break
                     # Put the job on the queue for the worker
                     job = (icao, final_exp, seq_log, captures_taken, status_payload_base)
                     self.capture_queue.put(job)
@@ -1017,16 +1037,30 @@ if __name__ == "__main__":
             time.sleep(5)
     except KeyboardInterrupt:
         print("\nShutdown requested (Ctrl+C)...")
+        # Signal all threads to stop and prevent new tracks from starting
         event_handler.shutdown_event.set()
+        # Notify the stacking orchestrator not to accept any new jobs
+        try:
+            request_shutdown()
+        except Exception:
+            pass
+        # Cancel any pending scheduler timer to avoid scheduling new track jobs
         if event_handler._scheduler_timer and event_handler._scheduler_timer.is_alive():
             event_handler._scheduler_timer.cancel()
             event_handler.is_scheduler_waiting = False
             print("Cancelled pending scheduler timer.")
+        # Wait briefly for the active tracking thread to finish
         active_thread = event_handler.active_thread
         if active_thread and active_thread.is_alive():
             print("Waiting for tracking thread to finish...")
             active_thread.join(timeout=15.0)
-            if active_thread.is_alive(): print("Warning: Tracking thread did not exit cleanly.")
+            if active_thread.is_alive():
+                print("Warning: Tracking thread did not exit cleanly.")
+        # Shut down the stack orchestrator early to prevent new jobs from being scheduled
+        try:
+            shutdown_stack_orchestrator()
+        except Exception as e:
+            print(f"Warning: Error during stack orchestrator shutdown: {e}")
     except Exception as e:
         print(f"FATAL: Unhandled exception in main loop: {e}")
         event_handler.shutdown_event.set()

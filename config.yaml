@@ -29,6 +29,12 @@ selection:
   track_quality_min: 0.2
   sky_masks: []
   Bonus: true  # Added for debug visibility of the bonus flag
+  # Weight definitions (not used when use_distance_only is enabled)
+  weights:
+    elevation: 0.4
+    sun_separation: 0.3
+    distance: 0.1
+    angular_speed: 0.2
 
 ev:
   start_margin_s: 5.0
@@ -38,6 +44,17 @@ ev:
 
 stacking:
   enabled: true
+  # Number of concurrent stacking workers. Increase this to process
+  # multiple sequences in parallel (e.g., 2 or 4 depending on CPU cores).
+  num_workers: 2
+  # Number of threads to use within each stacking job to compute the
+  # mean, robust and anomaly stacks concurrently. Defaults to 3.
+  internal_threads: 3
+  # Sigma clipping Z value for robust stacking. Used by the stacker.
+  sigma_clip_z: 3.0
+  # Radius in pixels to mask around the aircraft center when computing
+  # the anomaly map. Used by the stacker.
+  anomaly_mask_radius_px: 20
 
 hardware:
   indi_host: 'localhost'
