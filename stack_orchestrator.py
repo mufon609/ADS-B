@@ -19,11 +19,6 @@ from typing import List, Dict, Optional
 from config_loader import CONFIG, LOG_DIR
 from stacker import stack_images
 
-try:
-    from image_analyzer import save_png_preview as _save_png_preview_helper
-except Exception:
-    _save_png_preview_helper = None  # Not used but retained for completeness
-
 # Global executor shared across all stacking requests
 _executor: Optional[ThreadPoolExecutor] = None
 

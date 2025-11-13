@@ -307,23 +307,6 @@ def measure_sharpness(image_path: str) -> float:
         return 0.0
     return _measure_sharpness_from_data(img_data) # This now uses the patched (min-max) function
 
-def estimate_exposure_adjustment(image_path: str, current_exposure_s: float) -> float:
-    """
-    DEPRECATED? Main logic now calls _estimate_exposure_adjustment_from_data directly.
-    Keeping this public function for potential external use or testing.
-    """
-    if CONFIG['development']['dry_run']:
-        return 1.0 # Return neutral for dry run
-
-    if not (isinstance(current_exposure_s, (int, float)) and current_exposure_s > 0):
-        print(f"Warning: Invalid current_exposure_s ({current_exposure_s}) passed to estimate_exposure_adjustment.")
-
-    img_data = _load_fits_data(image_path)
-    if img_data is None:
-        return 1.0
-    return _estimate_exposure_adjustment_from_data(img_data) # Calls patched 16-bit function
-
-
 def detect_aircraft(image_path: str, sim_initial_error_s: float = 0.0) -> dict:
     """Loads FITS image, detects aircraft-like blobs, and returns results including sharpness."""
     

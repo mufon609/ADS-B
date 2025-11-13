@@ -305,11 +305,6 @@ class IndiController(PyIndi.BaseClient):
                 return (altaz.az.deg, altaz.alt.deg)
         raise ValueError("Could not get mount coordinates")
 
-    def get_current_az_el(self) -> tuple[float, float]:
-        if CONFIG['development']['dry_run']: return self.simulated_az_el
-        try: return self._get_current_az_el_internal()
-        except Exception as e: print(f"Error getting current Az/El: {e}. Returning (0,0)."); return (0.0, 0.0)
-
     def slew_to_az_el(self, az: float, el: float, progress_cb: Optional[Callable[[float, float, str], None]] = None) -> bool:
         if CONFIG['development']['dry_run']:
             frame = get_altaz_frame(self.observer_loc)

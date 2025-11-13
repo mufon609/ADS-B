@@ -4,7 +4,7 @@ development:
   dry_run: true # If True, bypasses all hardware interaction for testing logic.
 
 adsb:
-  json_file_path: '/home/dump/Desktop/project/dump1090/public_html/data/aircraft.json'
+  json_file_path: 'data/aircraft.json'
 
 predictions:
   deltas_sec: [1, 2, 3, 5, 8, 13, 21, 34]

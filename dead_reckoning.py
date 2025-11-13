@@ -76,22 +76,4 @@ def estimate_positions_at_times(aircraft_data: dict, timestamps: List[float]) ->
         pred['est_time'] = ts
         predictions.append(pred)
     return predictions
-
-def estimate_positions(aircraft_data: dict) -> Dict[str, dict]:
-    """
-    Estimates aircraft positions at the fixed delta intervals from the config.
-    """
-    predictions: Dict[str, dict] = {}
-    start_time = aircraft_data['timestamp']
-    for delta in CONFIG['predictions']['deltas_sec']:
-        pred = _predict(
-            aircraft_data['lat'], aircraft_data['lon'], aircraft_data['alt'],
-            aircraft_data['gs'], aircraft_data['track'],
-            aircraft_data.get('vert_rate'),
-            float(delta)
-        )
-        if pred is None:
-            continue
-        pred['est_time'] = start_time + float(delta)
-        predictions[f'delta_{delta}'] = pred
-    return predictions
+        

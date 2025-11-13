@@ -67,18 +67,6 @@ def distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
         print(f"Warning: Geodesic distance calculation failed between ({lat1},{lon1}) and ({lat2},{lon2}): {e}")
         return float('inf') # Return infinity or another indicator of failure
 
-# Keep haversine for reference or specific use cases if needed, but rename
-def _haversine_distance_km_spherical(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Calculates the Haversine distance assuming a spherical Earth."""
-    R_km = 6371.0 # Radius of Earth in kilometers
-    lat1_rad, lon1_rad = math.radians(lat1), math.radians(lon1)
-    lat2_rad, lon2_rad = math.radians(lat2), math.radians(lon2)
-
-    dlon, dlat = lon2_rad - lon1_rad, lat2_rad - lat1_rad
-    a = math.sin(dlat / 2)**2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon / 2)**2
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    return R_km * c
-
 def get_sun_azel(timestamp: float, observer_loc: EarthLocation) -> tuple:
     """Gets the Sun's current Azimuth and Elevation."""
     time = Time(timestamp, format='unix')
