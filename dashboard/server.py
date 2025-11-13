@@ -284,7 +284,9 @@ async def api_recent_stacks(icao: str, limit: int = 5):
     """
     List recent sequence directories for a given ICAO (newest first).
     """
-    icao = (icao or "").strip().lower()
+    # --- Security Fix: Path Traversal ---
+    # Sanitize icao to prevent directory traversal attacks.
+    icao = os.path.basename((icao or "").strip().lower())
     limit = max(1, min(limit, 50)) # Clamp limit
 
     seq_dirs = await asyncio.to_thread(_find_sequence_dirs_for_icao, icao)
@@ -331,9 +333,11 @@ async def api_sequence_manifest(icao: str, sequence_id: str):
     """
     Return manifest.json for a specific sequence if available.
     """
-    icao = (icao or "").strip().lower()
-    # Basic validation of sequence_id format? Assuming it's just a name for now.
-    sequence_id = (sequence_id or "").strip()
+    # --- Security Fix: Path Traversal ---
+    # Sanitize icao and sequence_id to prevent directory traversal attacks.
+    # os.path.basename effectively strips any directory components.
+    icao = os.path.basename((icao or "").strip().lower())
+    sequence_id = os.path.basename((sequence_id or "").strip())
 
     seq_dir = os.path.join(STACK_ROOT, icao, sequence_id)
     # Check if directory exists synchronously first (fast check)
