@@ -659,7 +659,24 @@ class FileHandler(FileSystemEventHandler):
             if CONFIG['development']['dry_run']:
                 slew_duration_s = start_state.get('slew_duration_s', 30.0)
                 timing_error_s = abs(start_state.get('time', time.time()) - (time.time() + slew_duration_s)) * 0.5
-                simulated_detection_result = detect_aircraft(None, sim_initial_error_s=timing_error_s)
+                if timing_error_s > 0:
+                    # This logic is moved from image_analyzer._detect_aircraft_from_data
+                    # to avoid calling it with a null path. We can create a synthetic
+                    # detection result without needing to load a fake image first.
+                    error_px = float(timing_error_s) * 20.0
+                    max_offset = 150.0
+                    dx = min(error_px * np.random.choice([-1, 1]), max_offset * np.sign(error_px))
+                    dy = 0
+                    cx = frame_center[0] + dx
+                    cy = frame_center[1] + dy
+                    cx = max(0, min(frame_w - 1, cx))
+                    cy = max(0, min(frame_h - 1, cy))
+                    simulated_detection_result = {
+                        'detected': True,
+                        'center_px': (cx, cy),
+                        'confidence': 0.95,
+                        'sharpness': 100.0  # Use a plausible dummy sharpness
+                    }
 
             # Initialize the local capture counter from the shared state.
             with self.track_lock:
@@ -703,6 +720,8 @@ class FileHandler(FileSystemEventHandler):
 
                 guide_path = None
                 guide_data = None
+                # In dry run, we still need to "create" the guide image file path and data
+                # so that it can be loaded for analysis (sharpness, etc.)
                 if CONFIG['development']['dry_run']:
                     try:
                         # Call snap_image, which creates the flat+text FITS
@@ -766,7 +785,11 @@ class FileHandler(FileSystemEventHandler):
                     except Exception as e:
                         print(f"  Track [{icao}]: Warning - Error occurred during PNG creation/check: {e}")
 
-                detection = simulated_detection_result if (CONFIG['development']['dry_run'] and simulated_detection_result) else _detect_aircraft_from_data(guide_data, original_shape=guide_shape)
+                # Use the simulated result on the first iteration, then do real detection
+                if iteration == 1 and simulated_detection_result:
+                    detection = simulated_detection_result
+                else:
+                    detection = _detect_aircraft_from_data(guide_data, original_shape=guide_shape)
 
                 if not detection or not detection.get('detected') or not detection.get('center_px'):
                     consecutive_losses += 1
@@ -803,8 +826,17 @@ class FileHandler(FileSystemEventHandler):
                 is_stable_np = guide_error_mag <= deadzone_px
                 is_stable = bool(is_stable_np)
 
+                # In dry run, we can now simulate the mount correcting the error
                 if CONFIG['development']['dry_run']:
-                    is_stable = True
+                    # Simulate the mount correcting the error over time
+                    new_offset_x = offset_px_x * 0.3 + (np.random.rand() - 0.5) * 2.0
+                    new_offset_y = offset_px_y * 0.3 + (np.random.rand() - 0.5) * 2.0
+                    # Update the 'simulated_detection_result' for the *next* iteration
+                    simulated_detection_result = detection.copy()
+                    simulated_detection_result['center_px'] = (frame_center[0] + new_offset_x, frame_center[1] + new_offset_y)
+                    # The first frame might not be stable, but subsequent ones should be
+                    if iteration > 1:
+                        is_stable = True
 
                 now = time.time()
                 try:
@@ -881,11 +913,12 @@ class FileHandler(FileSystemEventHandler):
                     # if pulse_ms_x > 0 or pulse_ms_y > 0: print(f"    - Guide Pulses: X={pulse_ms_x}ms, Y={pulse_ms_y}ms")
                     time.sleep(settle_s)
 
-                if CONFIG['development']['dry_run'] and simulated_detection_result:
-                    new_offset_x = offset_px_x * 0.3 + (np.random.rand() - 0.5) * 2.0
-                    new_offset_y = offset_px_y * 0.3 + (np.random.rand() - 0.5) * 2.0
-                    simulated_detection_result = detection.copy()
-                    simulated_detection_result['center_px'] = (frame_center[0] + new_offset_x, frame_center[1] + new_offset_y)
+                # This simulation logic is now handled inside the `is_stable` block for dry run
+                # if CONFIG['development']['dry_run'] and simulated_detection_result:
+                #     new_offset_x = offset_px_x * 0.3 + (np.random.rand() - 0.5) * 2.0
+                #     new_offset_y = offset_px_y * 0.3 + (np.random.rand() - 0.5) * 2.0
+                #     simulated_detection_result = detection.copy()
+                #     simulated_detection_result['center_px'] = (frame_center[0] + new_offset_x, frame_center[1] + new_offset_y)
 
                 now = time.time()
                 if is_stable and (now - last_seq_ts) > min_sequence_interval_s:
@@ -1007,6 +1040,10 @@ class FileHandler(FileSystemEventHandler):
 
 
 if __name__ == "__main__":
+    import logging
+    import sys
+    logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+
     ensure_log_dir()
     adsb_watch_file = os.path.normpath(os.path.abspath(CONFIG['adsb']['json_file_path']))
     adsb_watch_path = os.path.dirname(adsb_watch_file)
@@ -1016,6 +1053,27 @@ if __name__ == "__main__":
     event_handler = FileHandler(adsb_watch_file)
     print("Performing initial read of aircraft data...")
     event_handler.process_file()
+
+    # Check for and process command.json at startup
+    command_filename = CONFIG['logging']['command_file']
+    command_file_path = os.path.normpath(os.path.join(LOG_DIR, command_filename))
+    if os.path.exists(command_file_path):
+        print(f"Found existing command file '{command_file_path}' at startup. Processing...")
+        try:
+            with open(command_file_path, 'r') as f:
+                command = json.load(f)
+            if 'track_icao' in command:
+                icao = command['track_icao'].lower().strip()
+                print(f"  Manual override to track ICAO: {icao} from startup command.")
+                event_handler.manual_target_icao = icao
+                # Trigger scheduler to pick up the manual target
+                event_handler._run_scheduler()
+            os.remove(command_file_path)
+            print("  Processed and removed startup command file.")
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"  Error processing startup command file '{command_file_path}': {e}")
+        except Exception as e:
+            print(f"  Unexpected error during startup command processing: {e}")
 
     adsb_observer = Observer()
     adsb_observer.schedule(event_handler, path=adsb_watch_path, recursive=False)

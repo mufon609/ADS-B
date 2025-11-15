@@ -95,13 +95,14 @@ def _measure_sharpness_from_data(image_data: np.ndarray) -> float:
     """
     if image_data is None or not np.any(np.isfinite(image_data)):
         return 0.0
-    img_8bit = cv2.normalize(np.nan_to_num(image_data), None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    # No need to convert to 8-bit. Laplacian can work on float32.
+    # img_8bit = cv2.normalize(np.nan_to_num(image_data), None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
 
-    if img_8bit is None:
-        return 0.0
+    # if img_8bit is None:
+    #     return 0.0
     try:
-        # Use CV_64F for higher precision before taking variance
-        laplacian = cv2.Laplacian(img_8bit, cv2.CV_64F)
+        # Use CV_64F for higher precision. Input must also be float64.
+        laplacian = cv2.Laplacian(image_data.astype(np.float64), cv2.CV_64F)
         if not np.all(np.isfinite(laplacian)):
              laplacian = np.nan_to_num(laplacian)
         return laplacian.var()
@@ -154,16 +155,27 @@ def _estimate_exposure_adjustment_from_data(image_data: np.ndarray) -> float:
         print(f"Error estimating exposure adjustment: {e}")
         return 1.0 # Return neutral factor on error
 
-def _detect_aircraft_from_data(image_data: np.ndarray, original_shape: Tuple[int, int]) -> Dict:
+def _detect_aircraft_from_data(image_data: np.ndarray, original_shape: Tuple[int, int], sim_initial_error_s: float = 0.0) -> Dict:
     """Internal aircraft detection logic operating on float32 NumPy array."""
     
     if CONFIG['development']['dry_run']:
-        # This function is called by the stacker. In dry run, the image
-        # is just text. Bypass detection and return a high-confidence
-        # detection at the center so stacking can proceed.
+        # In dry run, the image is just text. Bypass detection.
         h, w = original_shape
-        # Calculate real sharpness of the flat+text image
-        sharpness = _measure_sharpness_from_data(image_data)
+        sharpness = _measure_sharpness_from_data(image_data) # Calculate real sharpness
+        
+        # Simulate initial error for the guide loop's first frame
+        if sim_initial_error_s > 0:
+            error_px = float(sim_initial_error_s) * 20.0
+            max_offset = 150.0
+            dx = min(error_px * np.random.choice([-1, 1]), max_offset * np.sign(error_px))
+            dy = 0
+            cx = w / 2.0 + dx
+            cy = h / 2.0 + dy
+            cx = max(0, min(w - 1, cx))
+            cy = max(0, min(h - 1, cy))
+            return {'detected': True, 'center_px': (cx, cy), 'confidence': 0.95, 'sharpness': sharpness}
+        
+        # For other calls (like stacker), return a centered detection
         return {'detected': True, 'center_px': (w / 2.0, h / 2.0), 'confidence': 0.95, 'sharpness': sharpness}
     
     try:
@@ -309,30 +321,12 @@ def measure_sharpness(image_path: str) -> float:
 
 def detect_aircraft(image_path: str, sim_initial_error_s: float = 0.0) -> dict:
     """Loads FITS image, detects aircraft-like blobs, and returns results including sharpness."""
-    
-    # This public function is called by main.py's guide loop for its *initial* simulation
-    if CONFIG['development']['dry_run'] and sim_initial_error_s > 0:
-        specs = CONFIG['camera_specs']
-        sharpness = CONFIG.get('capture', {}).get('detection', {}).get('sharpness_min', 10.0) + 50
-        simulated_confidence = 0.95
-        error_px = float(sim_initial_error_s or 0.0) * 20.0
-        max_offset = 150.0
-        dx = min(error_px * np.random.choice([-1, 1]), max_offset * np.sign(error_px))
-        dy = 0
-        width = specs.get('resolution_width_px', 640)
-        height = specs.get('resolution_height_px', 480)
-        cx = width  / 2.0 + dx; cy = height / 2.0 + dy
-        cx = max(0, min(width - 1, cx)); cy = max(0, min(height - 1, cy))
-        return {'detected': True, 'center_px': (cx, cy), 'confidence': simulated_confidence, 'sharpness': sharpness}
-
-    # --- Real Hardware Logic ---
-    # This path is used when not in dry run OR when called by stacker in dry run
     img_data = _load_fits_data(image_path)
     if img_data is None:
         return {'detected': False, 'reason': 'load_error'}
     
-    # This call now correctly handles dry run logic internally (returns fake center)
-    return _detect_aircraft_from_data(img_data, original_shape=img_data.shape)
+    # The internal function now handles all logic, including dry run simulation
+    return _detect_aircraft_from_data(img_data, original_shape=img_data.shape, sim_initial_error_s=sim_initial_error_s)
 
 def save_png_preview(fits_path: str, png_path_out: Optional[str] = None) -> str:
     """
