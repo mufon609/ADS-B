@@ -13,11 +13,14 @@ from __future__ import annotations
 import os
 import json
 import time
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Optional
 
 from config_loader import CONFIG, LOG_DIR
 from stacker import stack_images
+
+logger = logging.getLogger(__name__)
 
 # Global executor shared across all stacking requests
 _executor: Optional[ThreadPoolExecutor] = None
@@ -104,7 +107,7 @@ def _run_stacking_pipeline(sequence_id: str, image_paths: List[str], capture_met
     """
     try:
         icao = _derive_icao(sequence_id)
-        print(f"  Orchestrator: Starting background stacking for sequence {sequence_id} (ICAO: {icao})")
+        logger.info(f"  Orchestrator: Starting background stacking for sequence {sequence_id} (ICAO: {icao})")
         # Create output directories
         aircraft_dir = os.path.join(LOG_DIR, "stack", icao)
         out_dir = os.path.join(aircraft_dir, sequence_id)
@@ -114,10 +117,10 @@ def _run_stacking_pipeline(sequence_id: str, image_paths: List[str], capture_met
         master_fits, qc = stack_images(image_paths, out_dir, params)
         # Determine status
         if not master_fits or qc.get("error"):
-            print(f"  Orchestrator: Stacking failed for sequence {sequence_id}. Reason: {qc.get('error', 'Unknown')}")
+            logger.error(f"  Orchestrator: Stacking failed for sequence {sequence_id}. Reason: {qc.get('error', 'Unknown')}")
             qc["status"] = "failed"
         else:
-            print(f"  Orchestrator: Stacking complete for sequence {sequence_id}.")
+            logger.info(f"  Orchestrator: Stacking complete for sequence {sequence_id}.")
             qc["status"] = qc.get("status", "success")
         # Build manifest
         manifest = {
@@ -142,7 +145,7 @@ def _run_stacking_pipeline(sequence_id: str, image_paths: List[str], capture_met
         with open(manifest_path, "w") as f:
             json.dump(manifest, f, indent=2)
     except Exception as e:
-        print(f"  Orchestrator: Unhandled exception in stacking worker: {e}")
+        logger.error(f"  Orchestrator: Unhandled exception in stacking worker: {e}")
         import traceback
         traceback.print_exc()
 
@@ -153,9 +156,9 @@ def shutdown() -> None:
     # Mark that no new jobs should be accepted
     _shutdown_requested = True
     if _executor:
-        print("  Orchestrator: Shutting down stacking thread pool...")
+        logger.info("  Orchestrator: Shutting down stacking thread pool...")
         try:
             _executor.shutdown(wait=True)
         finally:
             _executor = None
-            print("  Orchestrator: Stacking thread pool shut down.")
+            logger.info("  Orchestrator: Stacking thread pool shut down.")

@@ -6,7 +6,10 @@ Module for reading and parsing aircraft.json from dump1090.
 import json
 import time
 import os
+import logging
 from config_loader import CONFIG
+
+logger = logging.getLogger(__name__)
 
 def _to_float(v):
     """Safely convert a value to a float, returning None on failure."""
@@ -47,14 +50,14 @@ def read_aircraft_data() -> dict:
         try:
             data = _load_once()
         except json.JSONDecodeError:
-            print(f"Warning: JSONDecodeError reading {os.path.basename(file_path)}. Retrying...")
+            logger.warning(f"Warning: JSONDecodeError reading {os.path.basename(file_path)}. Retrying...")
             time.sleep(RETRY_ON_DECODE_MS / 1000.0)
             data = _load_once() # Retry load
 
         # Get the 'now' timestamp from *within* the file.
         file_time = _to_float(data.get('now'))
         if file_time is None:
-             print(f"Warning: Missing or invalid 'now' timestamp in {os.path.basename(file_path)}. Skipping.")
+             logger.warning(f"Warning: Missing or invalid 'now' timestamp in {os.path.basename(file_path)}. Skipping.")
              return {}
         # We no longer compare file_time to time.time(). We trust the file's 'now'.
 
@@ -123,7 +126,7 @@ def read_aircraft_data() -> dict:
 
             if not is_valid:
                 # Add optional verbose logging here if needed
-                # print(f"DEBUG: Skipping {icao} - lat:{lat}, lon:{lon}, alt:{alt}, track:{track}, gs:{gs}")
+                # logger.debug(f"DEBUG: Skipping {icao} - lat:{lat}, lon:{lon}, alt:{alt}, track:{track}, gs:{gs}")
                 skipped_invalid += 1
                 continue
 
@@ -145,20 +148,20 @@ def read_aircraft_data() -> dict:
 
         # Optional: Add summary print here if needed
         # if skipped_stale or skipped_invalid or skipped_alt:
-        #    print(f"DEBUG: Read aircraft: {processed_count} processed, "
+        #    logger.debug(f"DEBUG: Read aircraft: {processed_count} processed, "
         #          f"{skipped_stale} stale, {skipped_invalid} invalid (pos/range), "
         #          f"{skipped_alt} missing alt.")
 
         return aircraft_dict
 
     except FileNotFoundError:
-        print(f"Warning: ADS-B file not found: {file_path}")
+        logger.warning(f"Warning: ADS-B file not found: {file_path}")
         return {}
     except json.JSONDecodeError as e:
-         print(f"ERROR: Failed to decode JSON from {file_path}: {e}")
+         logger.error(f"ERROR: Failed to decode JSON from {file_path}: {e}")
          return {} # Return empty on decode error after retry
     except Exception as e:
-        print(f"ERROR: Unexpected error in read_aircraft_data: {e}")
+        logger.error(f"ERROR: Unexpected error in read_aircraft_data: {e}")
         # Optionally re-raise or log traceback here
         # import traceback
         # traceback.print_exc()

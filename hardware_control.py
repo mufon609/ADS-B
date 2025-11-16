@@ -9,6 +9,7 @@ import numpy as np
 import cv2
 import threading
 import queue
+import logging
 from typing import List, Optional, Callable
 from storage import append_to_json
 from config_loader import CONFIG, LOG_DIR
@@ -19,6 +20,8 @@ import astropy.units as u
 from astropy.time import Time
 from astropy.io import fits
 from stack_orchestrator import schedule_stack_and_publish
+
+logger = logging.getLogger(__name__)
 
 
 class IndiController(PyIndi.BaseClient):
@@ -36,7 +39,7 @@ class IndiController(PyIndi.BaseClient):
         is_dry_run = CONFIG['development']['dry_run']
 
         if is_dry_run:
-            print("[DRY RUN] IndiController initialized in dry-run mode.")
+            logger.info("[DRY RUN] IndiController initialized in dry-run mode.")
             self.simulated_az_el = (180.0, 45.0)
             # Dummy devices for dry run to prevent errors later if attributes are accessed
             self.mount = None
@@ -45,11 +48,11 @@ class IndiController(PyIndi.BaseClient):
             # No early return here anymore
         else:
             # --- Real Hardware Init ---
-            print("Connecting to INDI server...")
+            logger.info("Connecting to INDI server...")
             self.setServer(CONFIG['hardware']['indi_host'], CONFIG['hardware']['indi_port'])
             if not self.connectServer():
                 raise ConnectionError("Failed to connect to INDI server")
-            print("Waiting for devices...")
+            logger.info("Waiting for devices...")
             time.sleep(5)
 
             self.mount = self.getDevice(CONFIG['hardware']['mount_device_name'])
@@ -57,20 +60,20 @@ class IndiController(PyIndi.BaseClient):
             self.focuser = self.getDevice(CONFIG['hardware']['focuser_device_name'])
             if not all([self.mount, self.camera, self.focuser]):
                 device_names = [d.getDeviceName() for d in self.getDevices()]
-                print(f"ERROR: One or more hardware devices not found. Available devices: {device_names}")
+                logger.critical(f"ERROR: One or more hardware devices not found. Available devices: {device_names}")
                 raise ValueError("One or more hardware devices not found")
 
             # Detect BLOB name only for real hardware
             self._blob_name = self._detect_ccd_blob_name()
-            print(f"  Setting BLOB mode for camera '{self.camera.getDeviceName()}' property '{self._blob_name}'")
+            logger.info(f"  Setting BLOB mode for camera '{self.camera.getDeviceName()}' property '{self._blob_name}'")
             self.setBLOBMode(PyIndi.B_CLIENT, self.camera.getDeviceName(), self._blob_name)
             time.sleep(1)
             blob_prop = self.camera.getBLOB(self._blob_name)
             if blob_prop is None:
-                 print(f"  - Warning: BLOB vector '{self._blob_name}' not available. Subscribing to all BLOBs.")
+                 logger.warning(f"  - Warning: BLOB vector '{self._blob_name}' not available. Subscribing to all BLOBs.")
                  self.setBLOBMode(PyIndi.B_CLIENT, self.camera.getDeviceName(), None)
 
-            print("--- Hardware Connected & Configured ---")
+            logger.info("--- Hardware Connected & Configured ---")
             # Print driver info only for real hardware
             for device, name in [(self.mount, "Mount"), (self.camera, "Camera"), (self.focuser, "Focuser")]:
                  dev_name_str = getattr(device, 'getDeviceName', lambda: 'UNKNOWN')()
@@ -78,7 +81,7 @@ class IndiController(PyIndi.BaseClient):
                  driver_info_text = "Driver info not available."
                  if driver_info_prop and len(driver_info_prop) > 0:
                       driver_info_text = getattr(driver_info_prop[0], 'text', driver_info_text)
-                 print(f"  - {name} ({dev_name_str}): {driver_info_text}")
+                 logger.info(f"  - {name} ({dev_name_str}): {driver_info_text}")
 
             # Configure Camera Settings only for real hardware
             cam_specs = CONFIG['camera_specs']
@@ -87,7 +90,7 @@ class IndiController(PyIndi.BaseClient):
                 widget = upload_mode.findWidgetByName("UPLOAD_CLIENT")
                 if widget and widget.s != PyIndi.ISS_ON:
                     self._set_switch_state(upload_mode, "UPLOAD_CLIENT", PyIndi.ISS_ON)
-                    print("  - Set Camera: Upload mode to 'Client'.")
+                    logger.info("  - Set Camera: Upload mode to 'Client'.")
 
             if cam_specs.get('cooling', {}).get('enabled', False):
                  cooler_switch = self._wait_switch(self.camera, "CCD_COOLER")
@@ -103,7 +106,7 @@ class IndiController(PyIndi.BaseClient):
                          if abs(widget.value - setpoint) > 0.1:
                               widget.value = setpoint
                               self.sendNewNumber(temp_prop)
-                              print(f"  - Set Camera: Cooling enabled, setpoint {setpoint}°C.")
+                              logger.info(f"  - Set Camera: Cooling enabled, setpoint {setpoint}°C.")
 
             if 'binning' in cam_specs:
                  bin_prop = self._wait_number(self.camera, "CCD_BINNING")
@@ -116,7 +119,7 @@ class IndiController(PyIndi.BaseClient):
                          hor_widget.value = bin_x
                          ver_widget.value = bin_y
                          self.sendNewNumber(bin_prop)
-                         print(f"  - Set Camera: Binning to {bin_x}x{bin_y}.")
+                         logger.info(f"  - Set Camera: Binning to {bin_x}x{bin_y}.")
 
             if 'gain' in cam_specs:
                  gain_prop = self._wait_number(self.camera, "CCD_GAIN")
@@ -126,7 +129,7 @@ class IndiController(PyIndi.BaseClient):
                      if widget and abs(widget.value - gain_val) > 0.1:
                          widget.value = gain_val
                          self.sendNewNumber(gain_prop)
-                         print(f"  - Set Camera: Gain to {gain_val}.")
+                         logger.info(f"  - Set Camera: Gain to {gain_val}.")
 
             if 'offset' in cam_specs:
                  offset_prop = self._wait_number(self.camera, "CCD_OFFSET")
@@ -136,9 +139,9 @@ class IndiController(PyIndi.BaseClient):
                      if widget and abs(widget.value - offset_val) > 0.1:
                          widget.value = offset_val
                          self.sendNewNumber(offset_prop)
-                         print(f"  - Set Camera: Offset to {offset_val}.")
+                         logger.info(f"  - Set Camera: Offset to {offset_val}.")
 
-            print("---------------------------------------")
+            logger.info("---------------------------------------")
 
         # Observer location is needed in both modes for coordinate conversions
         obs_cfg = CONFIG['observer']
@@ -147,7 +150,7 @@ class IndiController(PyIndi.BaseClient):
             lon=obs_cfg['longitude_deg']*u.deg,
             height=obs_cfg['altitude_m']*u.m
         )
-        print("--- IndiController Init Complete ---") # Add marker
+        logger.info("--- IndiController Init Complete ---") # Add marker
 
 
     # --- Helper to safely set switch states ---
@@ -162,7 +165,7 @@ class IndiController(PyIndi.BaseClient):
              widget.s = state
              self.sendNewSwitch(switch_vector)
          else:
-             print(f"Warning: Widget '{widget_name}' not found in switch vector '{switch_vector.name}'.")
+             logger.warning(f"Warning: Widget '{widget_name}' not found in switch vector '{switch_vector.name}'.")
 
 
     def _wait_prop(self, get_func, dev, name, timeout=5.0):
@@ -175,7 +178,7 @@ class IndiController(PyIndi.BaseClient):
                 return prop
             time.sleep(0.2) # Longer sleep to reduce busy-waiting
         dev_name = getattr(dev, "getDeviceName", lambda: "UNKNOWN")()
-        print(f"Warning: Property '{name}' not available on device '{dev_name}' after {timeout}s.")
+        logger.warning(f"Warning: Property '{name}' not available on device '{dev_name}' after {timeout}s.")
         return None
 
     def _wait_number(self, dev, name, timeout=5.0):
@@ -189,7 +192,7 @@ class IndiController(PyIndi.BaseClient):
         """Detects the likely name of the primary image BLOB property."""
         # Ensure camera device exists
         if not self.camera:
-            print("  - Error: Camera device not initialized during BLOB detection.")
+            logger.error("  - Error: Camera device not initialized during BLOB detection.")
             return "CCD1" # Fallback
 
         # Check common names
@@ -199,11 +202,11 @@ class IndiController(PyIndi.BaseClient):
              while time.time() - t0 < prop_timeout:
                  blob_prop = self.camera.getBLOB(name)
                  if blob_prop is not None:
-                     print(f"  - Detected camera BLOB property: {name}")
+                     logger.info(f"  - Detected camera BLOB property: {name}")
                      return name
                  time.sleep(0.1)
 
-        print("  - Warning: Could not detect primary BLOB property, falling back to 'CCD1'.")
+        logger.warning("  - Warning: Could not detect primary BLOB property, falling back to 'CCD1'.")
         return "CCD1"
 
     def newBLOB(self, bp):
@@ -214,14 +217,14 @@ class IndiController(PyIndi.BaseClient):
         blob_data = None
         try:
             if len(bp) > 0 and bp[0].bloblen > 0: blob_data = bp[0].getblobdata()
-            else: print("  - Warning: Received empty BLOB."); PyIndi.BaseClient.newBLOB(self, bp); return
-        except Exception as e: print(f"  - Error getting BLOB data: {e}"); PyIndi.BaseClient.newBLOB(self, bp); return
+            else: logger.warning("  - Warning: Received empty BLOB."); PyIndi.BaseClient.newBLOB(self, bp); return
+        except Exception as e: logger.error(f"  - Error getting BLOB data: {e}"); PyIndi.BaseClient.newBLOB(self, bp); return
         with self._blob_lock:
             try:
                 exposure_token = self._exposure_queue.get_nowait()
                 self._received_blobs[exposure_token] = blob_data
-            except queue.Empty: print("  - Warning: Received BLOB but no exposure was pending. Discarding.")
-            except Exception as e: print(f"  - Error processing BLOB in newBLOB handler: {e}")
+            except queue.Empty: logger.warning("  - Warning: Received BLOB but no exposure was pending. Discarding.")
+            except Exception as e: logger.error(f"  - Error processing BLOB in newBLOB handler: {e}")
         PyIndi.BaseClient.newBLOB(self, bp)
 
     def get_hardware_status(self) -> dict:
@@ -231,7 +234,7 @@ class IndiController(PyIndi.BaseClient):
         except Exception as e:
              status["mount_az_el"] = (0.0, 0.0)
              if not CONFIG['development']['dry_run']:
-                  print(f"Warning: could not get mount az/el: {e}")
+                  logger.warning(f"Warning: could not get mount az/el: {e}")
         
         if not CONFIG['development']['dry_run']:
             if self.mount:
@@ -310,7 +313,7 @@ class IndiController(PyIndi.BaseClient):
             frame = get_altaz_frame(self.observer_loc)
             max_slew = CONFIG['hardware'].get('max_slew_deg_s', 6.0)
             realistic_slew_time = slew_time_needed(self.simulated_az_el, (az, el), max_slew, frame) if max_slew > 0 else 5.0
-            print(f"[DRY RUN] Slewing from {self.simulated_az_el} to az/el: ({az:.2f}, {el:.2f})")
+            logger.info(f"[DRY RUN] Slewing from {self.simulated_az_el} to az/el: ({az:.2f}, {el:.2f})")
             steps = max(1, int(max(0.5, realistic_slew_time) / 0.5))
             start_az, start_el = self.simulated_az_el
             az_delta = ((az - start_az + 180.0) % 360.0) - 180.0
@@ -320,7 +323,7 @@ class IndiController(PyIndi.BaseClient):
                     if progress_cb:
                         try: progress_cb(*self.simulated_az_el, "abort")
                         except Exception: pass
-                    print("[DRY RUN] Slew aborted by shutdown.")
+                    logger.info("[DRY RUN] Slew aborted by shutdown.")
                     return False
                 f = i / steps
                 cur_az = (start_az + f * az_delta) % 360.0
@@ -334,11 +337,11 @@ class IndiController(PyIndi.BaseClient):
             if progress_cb:
                  try: progress_cb(self.simulated_az_el[0], self.simulated_az_el[1], "arrived")
                  except Exception: pass
-            print(f"[DRY RUN] Slew complete. Mount is now at: ({az:.2f}, {el:.2f})")
+            logger.info(f"[DRY RUN] Slew complete. Mount is now at: ({az:.2f}, {el:.2f})")
             return True
 
         if not self.mount:
-             print("Error: Mount not connected for slew.")
+             logger.error("Error: Mount not connected for slew.")
              if progress_cb:
                  try: progress_cb(0, 0, "abort")
                  except Exception: pass
@@ -358,26 +361,26 @@ class IndiController(PyIndi.BaseClient):
             separation_deg_future = angular_sep_deg((az, el), sun_az_el_future, arrival_frame)
             min_sep = float(CONFIG['selection'].get('min_sun_separation_deg', 15.0))
             if separation_deg_future < min_sep:
-                print(f"SAFETY ABORT (Predictive): Target ({az:.1f}, {el:.1f}) will be {separation_deg_future:.2f}° from Sun.")
+                logger.warning(f"SAFETY ABORT (Predictive): Target ({az:.1f}, {el:.1f}) will be {separation_deg_future:.2f}° from Sun.")
                 if progress_cb:
                     try: progress_cb(current_az, current_el, "abort")
                     except Exception: pass
                 return False
         except Exception as e:
-            print(f"Warning: Predictive sun safety check failed: {e}.")
+            logger.warning(f"Warning: Predictive sun safety check failed: {e}.")
         
         alt_limit_prop = self.mount.getNumber("ALTITUDE_LIMITS")
         if alt_limit_prop: # Altitude limit check
             min_el_w = alt_limit_prop.findWidgetByName("MIN")
             if min_el_w and el < min_el_w.value:
-                 print(f"SAFETY ABORT: El {el:.2f} < limit {min_el_w.value:.2f} deg.")
+                 logger.warning(f"SAFETY ABORT: El {el:.2f} < limit {min_el_w.value:.2f} deg.")
                  if progress_cb:
                      try: progress_cb(*self._get_current_az_el_internal(), "abort")
                      except Exception: pass
                  return False
             max_el_w = alt_limit_prop.findWidgetByName("MAX")
             if max_el_w and el > max_el_w.value:
-                 print(f"SAFETY ABORT: El {el:.2f} > limit {max_el_w.value:.2f} deg.")
+                 logger.warning(f"SAFETY ABORT: El {el:.2f} > limit {max_el_w.value:.2f} deg.")
                  if progress_cb:
                      try: progress_cb(*self._get_current_az_el_internal(), "abort")
                      except Exception: pass
@@ -414,10 +417,10 @@ class IndiController(PyIndi.BaseClient):
                      else:
                          coord_prop = None
                 except Exception as e:
-                     print(f"Error converting AltAz to EQ: {e}")
+                     logger.error(f"Error converting AltAz to EQ: {e}")
                      coord_prop = None
             else:
-                 print("Error: No HORIZONTAL_COORD or EQUATORIAL_EOD_COORD available.")
+                 logger.error("Error: No HORIZONTAL_COORD or EQUATORIAL_EOD_COORD available.")
                  if progress_cb:
                      try:
                          progress_cb(*self._get_current_az_el_internal(), "abort")
@@ -426,7 +429,7 @@ class IndiController(PyIndi.BaseClient):
                  return False
         
         if not coord_prop: # Check if send command failed
-             print("Error: Failed to send slew command.")
+             logger.error("Error: Failed to send slew command.")
              if progress_cb:
                  try:
                      progress_cb(*self._get_current_az_el_internal(), "abort")
@@ -434,7 +437,7 @@ class IndiController(PyIndi.BaseClient):
                      progress_cb(0, 0, "abort")
              return False
         
-        print(f"Slewing to az/el: ({az:.2f}, {el:.2f})...")
+        logger.info(f"Slewing to az/el: ({az:.2f}, {el:.2f})...")
         try: # Estimate timeout
              cur_az_est, cur_el_est = self._get_current_az_el_internal()
              max_slew_est = float(CONFIG['hardware'].get('max_slew_deg_s', 6.0))
@@ -450,7 +453,7 @@ class IndiController(PyIndi.BaseClient):
         while time.time() < slew_timeout_at: # Polling loop
             coord_prop = self.mount.getNumber(coord_prop_name)
             if not coord_prop:
-                print("Warning: Mount property lost.")
+                logger.warning("Warning: Mount property lost.")
                 slew_finished_state = PyIndi.IPS_ALERT
                 break
             slew_finished_state = coord_prop.s
@@ -462,7 +465,7 @@ class IndiController(PyIndi.BaseClient):
                         except Exception: pass
                 except Exception: pass
                 if self.shutdown_event and self.shutdown_event.is_set():
-                    print("Slew aborted by shutdown.")
+                    logger.info("Slew aborted by shutdown.")
                     if progress_cb:
                         try: progress_cb(*self._get_current_az_el_internal(), "abort")
                         except Exception: progress_cb(0, 0, "abort")
@@ -476,59 +479,59 @@ class IndiController(PyIndi.BaseClient):
         final_state = final_prop.s if final_prop else PyIndi.IPS_ALERT
         
         if final_state == PyIndi.IPS_OK: # SUCCESS Check
-            print("Slew completed successfully (IPS_OK).")
+            logger.info("Slew completed successfully (IPS_OK).")
             try:
                 cur_az_final, cur_el_final = self._get_current_az_el_internal()
                 if progress_cb:
                     try: progress_cb(cur_az_final, cur_el_final, "arrived")
                     except Exception: pass
-                print(f"Mount final position: ({cur_az_final:.2f}, {cur_el_final:.2f})")
+                logger.info(f"Mount final position: ({cur_az_final:.2f}, {cur_el_final:.2f})")
                 return True
             except Exception as e:
-                print(f"Error getting final pos after OK slew: {e}")
+                logger.error(f"Error getting final pos after OK slew: {e}")
                 if progress_cb:
                     try: progress_cb(az, el, "arrived")
                     except Exception: pass
                 return True
         elif final_state == PyIndi.IPS_ALERT: # ALERT check
-            print("Warning: Slew failed (Alert).")
+            logger.warning("Warning: Slew failed (Alert).")
             if progress_cb:
                 try: progress_cb(*self._get_current_az_el_internal(), "abort")
                 except Exception: progress_cb(0, 0, "abort")
             return False
         elif final_state == PyIndi.IPS_BUSY: # TIMEOUT check
-            print("Warning: Slew timed out.")
+            logger.warning("Warning: Slew timed out.")
             if progress_cb:
                 try: progress_cb(*self._get_current_az_el_internal(), "abort")
                 except Exception: progress_cb(0, 0, "abort")
             return False
         else: # UNEXPECTED state check
             state_str = {PyIndi.IPS_IDLE:"IDLE", PyIndi.IPS_OK:"OK", PyIndi.IPS_BUSY:"BUSY", PyIndi.IPS_ALERT:"ALERT"}.get(final_state, str(final_state))
-            print(f"Warning: Slew unexpected state ({state_str}). Failure.")
+            logger.warning(f"Warning: Slew unexpected state ({state_str}). Failure.")
             if progress_cb:
                 try: progress_cb(*self._get_current_az_el_internal(), "abort")
                 except Exception: progress_cb(0, 0, "abort")
             return False
 
     def autofocus(self, alt_ft: float = None) -> bool:
-        if self.shutdown_event and self.shutdown_event.is_set(): print("Autofocus aborted: shutdown."); return False
-        if CONFIG['development']['dry_run']: print(f"[DRY RUN] Performing autofocus."); time.sleep(3.0); return True
-        if not self.focuser or not self.camera: print("Error: Focuser or Camera not connected."); return False
+        if self.shutdown_event and self.shutdown_event.is_set(): logger.info("Autofocus aborted: shutdown."); return False
+        if CONFIG['development']['dry_run']: logger.info(f"[DRY RUN] Performing autofocus."); time.sleep(3.0); return True
+        if not self.focuser or not self.camera: logger.error("Error: Focuser or Camera not connected."); return False
         
-        print("Starting autofocus...")
+        logger.info("Starting autofocus...")
         af_cfg = CONFIG['capture'].get('autofocus', {})
         max_duration_s = float(af_cfg.get('max_duration_s', 180.0))
         routine_timeout_at = time.time() + max_duration_s
         sharp_thresh = float(af_cfg.get('sharpness_threshold', 20.0))
         
         abs_pos_prop = self._wait_number(self.focuser, "ABS_FOCUS_POSITION")
-        if not abs_pos_prop: print("Focus failed: No absolute position."); return False
+        if not abs_pos_prop: logger.error("Focus failed: No absolute position."); return False
         pos_widget = abs_pos_prop.findWidgetByName("FOCUS_ABSOLUTE_POSITION")
-        if not pos_widget: print("Focus failed: Cannot find position widget."); return False
+        if not pos_widget: logger.error("Focus failed: Cannot find position widget."); return False
         
         current_pos = pos_widget.value
         focuser_min, focuser_max = pos_widget.min, pos_widget.max
-        print(f"  Focuser limits: [{focuser_min:.0f} - {focuser_max:.0f}], Current: {current_pos:.0f}")
+        logger.info(f"  Focuser limits: [{focuser_min:.0f} - {focuser_max:.0f}], Current: {current_pos:.0f}")
         
         step_base = int(af_cfg.get('step_base', 50))
         scan_range = int(af_cfg.get('scan_range', 5))
@@ -536,15 +539,15 @@ class IndiController(PyIndi.BaseClient):
         raw_positions = [current_pos + i * step_size for i in range(-scan_range, scan_range + 1)]
         positions = sorted(list(set(int(round(p)) for p in raw_positions if focuser_min <= p <= focuser_max)))
         
-        if not positions or len(positions) < 3: print(f"Focus failed: Insufficient positions ({len(positions)})."); return False
+        if not positions or len(positions) < 3: logger.error(f"Focus failed: Insufficient positions ({len(positions)})."); return False
         
-        print(f"  Scanning positions: {positions}")
+        logger.info(f"  Scanning positions: {positions}")
         sharpness_scores = {}
         focus_exposure = float(af_cfg.get('exposure_s', 0.1))
         
         for pos in positions: # Scan loop
-            if time.time() > routine_timeout_at: print("Autofocus aborted: timeout."); return False
-            if self.shutdown_event and self.shutdown_event.is_set(): print("Autofocus aborted: shutdown."); return False
+            if time.time() > routine_timeout_at: logger.error("Autofocus aborted: timeout."); return False
+            if self.shutdown_event and self.shutdown_event.is_set(): logger.info("Autofocus aborted: shutdown."); return False
             
             pos_widget.value = pos
             self.sendNewNumber(abs_pos_prop)
@@ -553,7 +556,7 @@ class IndiController(PyIndi.BaseClient):
             move_finished_state = PyIndi.IPS_BUSY
             while time.time() < move_timeout_at: # Wait for move
                 pos_prop = self.focuser.getNumber("ABS_FOCUS_POSITION")
-                if not pos_prop: print(f"  Warning: Focuser property lost moving to {pos}."); move_finished_state = PyIndi.IPS_ALERT; break
+                if not pos_prop: logger.warning(f"  Warning: Focuser property lost moving to {pos}."); move_finished_state = PyIndi.IPS_ALERT; break
                 move_finished_state = pos_prop.s
                 if move_finished_state == PyIndi.IPS_BUSY:
                     if self.shutdown_event and self.shutdown_event.is_set(): return False
@@ -564,7 +567,7 @@ class IndiController(PyIndi.BaseClient):
             final_state = final_prop.s if final_prop else PyIndi.IPS_ALERT
             if final_state != PyIndi.IPS_OK: # Check completion
                  state_str = {PyIndi.IPS_IDLE: "IDLE", PyIndi.IPS_OK: "OK", PyIndi.IPS_BUSY: "BUSY", PyIndi.IPS_ALERT: "ALERT"}.get(final_state, str(final_state))
-                 print(f"  Focus move to {pos} failed (State: {state_str}). Aborting scan."); return False
+                 logger.error(f"  Focus move to {pos} failed (State: {state_str}). Aborting scan."); return False
             
             snap_path = None # Capture image
             try:
@@ -572,19 +575,19 @@ class IndiController(PyIndi.BaseClient):
                 if not snap_path: raise IOError("Capture failed")
                 sharpness = measure_sharpness(snap_path)
                 sharpness_scores[pos] = sharpness
-                print(f"  Position {pos:.0f}: Sharpness {sharpness:.2f}")
-            except Exception as e: print(f"  Error capture/analysis at {pos}: {e}"); sharpness_scores[pos] = 0.0
+                logger.info(f"  Position {pos:.0f}: Sharpness {sharpness:.2f}")
+            except Exception as e: logger.error(f"  Error capture/analysis at {pos}: {e}"); sharpness_scores[pos] = 0.0
         
-        if not sharpness_scores: print("Focus failed: No scores recorded."); return False
+        if not sharpness_scores: logger.error("Focus failed: No scores recorded."); return False
         
         best_pos = max(sharpness_scores, key=sharpness_scores.get)
         best_sharp = sharpness_scores[best_pos]
         
         if best_sharp < sharp_thresh:
-            print(f"Focus failed: Best sharpness ({best_sharp:.2f}) < threshold ({sharp_thresh:.1f}).")
+            logger.error(f"Focus failed: Best sharpness ({best_sharp:.2f}) < threshold ({sharp_thresh:.1f}).")
             pos_widget.value = current_pos; self.sendNewNumber(abs_pos_prop); return False
         
-        print(f"  Best focus at {best_pos:.0f} (Sharpness: {best_sharp:.2f}). Moving...");
+        logger.info(f"  Best focus at {best_pos:.0f} (Sharpness: {best_sharp:.2f}). Moving...");
         pos_widget.value = best_pos
         self.sendNewNumber(abs_pos_prop)
         
@@ -592,7 +595,7 @@ class IndiController(PyIndi.BaseClient):
         move_finished_state = PyIndi.IPS_BUSY
         while time.time() < move_timeout_at: # Wait for final move
              pos_prop = self.focuser.getNumber("ABS_FOCUS_POSITION")
-             if not pos_prop: print(f"  Warning: Focuser property lost on final move."); move_finished_state = PyIndi.IPS_ALERT; break
+             if not pos_prop: logger.warning(f"  Warning: Focuser property lost on final move."); move_finished_state = PyIndi.IPS_ALERT; break
              move_finished_state = pos_prop.s
              if move_finished_state == PyIndi.IPS_BUSY:
                   if self.shutdown_event and self.shutdown_event.is_set(): return False
@@ -603,17 +606,17 @@ class IndiController(PyIndi.BaseClient):
         final_state = final_prop.s if final_prop else PyIndi.IPS_ALERT
         if final_state != PyIndi.IPS_OK:
             state_str = {PyIndi.IPS_IDLE: "IDLE", PyIndi.IPS_OK: "OK", PyIndi.IPS_BUSY: "BUSY", PyIndi.IPS_ALERT: "ALERT"}.get(final_state, str(final_state))
-            print(f"Warning: Move to best focus {best_pos} failed (State: {state_str}).")
+            logger.warning(f"Warning: Move to best focus {best_pos} failed (State: {state_str}).")
         
-        print(f"Autofocus complete. Final position: {best_pos:.0f}")
+        logger.info(f"Autofocus complete. Final position: {best_pos:.0f}")
         log_entry = {'alt_ft': alt_ft, 'best_pos': best_pos, 'sharpness': best_sharp, 'timestamp': time.time(), 'scan_data': sharpness_scores}
         append_to_json([log_entry], os.path.join(LOG_DIR, 'focus_logs.json')); return True
 
     def guide_pulse(self, direction: str, duration_ms: int):
         duration_ms = max(0, int(duration_ms))
-        if direction not in ('N','S','E','W'): print(f"Warning: Invalid guide direction '{direction}'"); return
+        if direction not in ('N','S','E','W'): logger.warning(f"Warning: Invalid guide direction '{direction}'"); return
         if CONFIG['development']['dry_run']: time.sleep(duration_ms / 1000.0); return
-        if not self.mount: print("Error: Mount not connected."); return
+        if not self.mount: logger.error("Error: Mount not connected."); return
         
         timed_prop_name, timed_widget_name = "", ""
         if direction in ['N', 'S']: timed_prop_name = "TELESCOPE_TIMED_GUIDE_NS"; timed_widget_name = "TIMED_GUIDE_N" if direction == 'N' else "TIMED_GUIDE_S"
@@ -636,25 +639,25 @@ class IndiController(PyIndi.BaseClient):
         self._set_switch_state(prop, widget_name, PyIndi.ISS_ON); time.sleep(duration_ms / 1000.0); self._set_switch_state(prop, widget_name, PyIndi.ISS_OFF)
 
     def park_mount(self) -> bool:
-        if CONFIG['development']['dry_run']: print("[DRY RUN] Parking mount."); self.simulated_az_el = (180.0, 0.0); return True
-        if not self.mount: print("Error: Mount not connected."); return False
+        if CONFIG['development']['dry_run']: logger.info("[DRY RUN] Parking mount."); self.simulated_az_el = (180.0, 0.0); return True
+        if not self.mount: logger.error("Error: Mount not connected."); return False
         
         park_prop = self.mount.getSwitch("TELESCOPE_PARK")
-        if not park_prop: print("Warning: Mount does not support PARK."); return False
+        if not park_prop: logger.warning("Warning: Mount does not support PARK."); return False
         park_widget = park_prop.findWidgetByName("PARK")
         if not park_widget and len(park_prop) > 0: park_widget = park_prop[0]
-        if not park_widget: print("Error: Cannot find PARK widget."); return False
+        if not park_widget: logger.error("Error: Cannot find PARK widget."); return False
         
         self._set_switch_state(park_prop, park_widget.name, PyIndi.ISS_ON)
-        print("Parking mount..."); park_timeout_at = time.time() + 120
+        logger.info("Parking mount..."); park_timeout_at = time.time() + 120
         
         park_finished_state = PyIndi.IPS_BUSY # Wait for completion
         while time.time() < park_timeout_at:
             park_state_prop = self.mount.getSwitch("TELESCOPE_PARK")
-            if not park_state_prop: print("Warning: Park property lost."); park_finished_state = PyIndi.IPS_ALERT; break
+            if not park_state_prop: logger.warning("Warning: Park property lost."); park_finished_state = PyIndi.IPS_ALERT; break
             park_finished_state = park_state_prop.s
             if park_finished_state == PyIndi.IPS_BUSY:
-                 if self.shutdown_event and self.shutdown_event.is_set(): print("Park aborted by shutdown."); return False
+                 if self.shutdown_event and self.shutdown_event.is_set(): logger.info("Park aborted by shutdown."); return False
                  time.sleep(1); continue
             else: break
         
@@ -662,11 +665,11 @@ class IndiController(PyIndi.BaseClient):
         
         if final_state == PyIndi.IPS_OK: # Check final state
              final_widget = final_prop.findWidgetByName(park_widget.name) if final_prop and park_widget else None
-             if final_widget and final_widget.s == PyIndi.ISS_ON: print("Mount parked successfully."); return True
-             else: print(f"Warning: Park OK, but widget state unexpected."); return True
-        elif final_state == PyIndi.IPS_ALERT: print("Warning: Park failed (Alert)."); return False
-        elif final_state == PyIndi.IPS_BUSY: print("Warning: Park timed out."); return False
-        else: state_str = {PyIndi.IPS_IDLE:"IDLE", PyIndi.IPS_OK:"OK", PyIndi.IPS_BUSY:"BUSY", PyIndi.IPS_ALERT:"ALERT"}.get(final_state, str(final_state)); print(f"Warning: Park finished unexpected ({state_str}). Failure."); return False
+             if final_widget and final_widget.s == PyIndi.ISS_ON: logger.info("Mount parked successfully."); return True
+             else: logger.warning(f"Warning: Park OK, but widget state unexpected."); return True
+        elif final_state == PyIndi.IPS_ALERT: logger.warning("Warning: Park failed (Alert)."); return False
+        elif final_state == PyIndi.IPS_BUSY: logger.warning("Warning: Park timed out."); return False
+        else: state_str = {PyIndi.IPS_IDLE:"IDLE", PyIndi.IPS_OK:"OK", PyIndi.IPS_BUSY:"BUSY", PyIndi.IPS_ALERT:"ALERT"}.get(final_state, str(final_state)); logger.warning(f"Warning: Park finished unexpected ({state_str}). Failure."); return False
 
     def snap_image(self, label: str) -> Optional[str]:
         images_dir = os.path.join(LOG_DIR, 'images')
@@ -679,10 +682,10 @@ class IndiController(PyIndi.BaseClient):
     def capture_image(self, exposure_s: float, save_path: str) -> Optional[str]:
         """Captures a single image using the BLOB queue mechanism."""
         try: os.makedirs(os.path.dirname(save_path), exist_ok=True)
-        except OSError as e: print(f"Error creating directory for {save_path}: {e}"); return None
+        except OSError as e: logger.error(f"Error creating directory for {save_path}: {e}"); return None
 
         if CONFIG['development']['dry_run']:
-            print(f"[DRY RUN] Simulating capture of: {os.path.basename(save_path)}")
+            logger.info(f"[DRY RUN] Simulating capture of: {os.path.basename(save_path)}")
             png_path = os.path.splitext(save_path)[0] + ".png"; h = CONFIG.get('camera_specs', {}).get('resolution_height_px', 480); w = CONFIG.get('camera_specs', {}).get('resolution_width_px', 640)
 
             # 1. Create uint16 base image
@@ -709,25 +712,25 @@ class IndiController(PyIndi.BaseClient):
             hdu = fits.PrimaryHDU(img_fits_uint16)
             hdu.header['EXPTIME'] = (float(exposure_s), 'Exposure time (s)'); hdu.header['DATE-OBS'] = time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime())
             try: fits.HDUList([hdu]).writeto(save_path, overwrite=True, checksum=True)
-            except Exception as e: print(f"[DRY RUN] Failed to write dummy FITS {save_path}: {e}"); return None
+            except Exception as e: logger.error(f"[DRY RUN] Failed to write dummy FITS {save_path}: {e}"); return None
 
             # 4. Generate PNG preview from the uint16 array (with text)
             try:
                 img_preview_8bit = cv2.normalize(img_fits_uint16, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
                 cv2.imwrite(png_path, img_preview_8bit)
-            except Exception as e: print(f"[DRY RUN] Failed to write dummy PNG {png_path}: {e}")
+            except Exception as e: logger.error(f"[DRY RUN] Failed to write dummy PNG {png_path}: {e}")
 
             return save_path
 
         # --- Real Capture Logic ---
         min_exp = float(CONFIG['capture'].get('exposure_min_s', 0.001)); max_exp = float(CONFIG['capture'].get('exposure_max_s', 10.0))
         clamped_exp = max(min_exp, min(max_exp, exposure_s));
-        if abs(clamped_exp - exposure_s) > 1e-6: print(f"  - Warning: Exposure {exposure_s:.4f}s clamped to {clamped_exp:.4f}s.")
+        if abs(clamped_exp - exposure_s) > 1e-6: logger.warning(f"  - Warning: Exposure {exposure_s:.4f}s clamped to {clamped_exp:.4f}s.")
         exposure_s = clamped_exp
         exp_prop = self._wait_number(self.camera, "CCD_EXPOSURE");
-        if not exp_prop: print("ERROR: CCD_EXPOSURE property not found."); return None
+        if not exp_prop: logger.error("ERROR: CCD_EXPOSURE property not found."); return None
         exp_widget = exp_prop.findWidgetByName("CCD_EXPOSURE_VALUE");
-        if not exp_widget: print("ERROR: CCD_EXPOSURE_VALUE widget not found."); return None
+        if not exp_widget: logger.error("ERROR: CCD_EXPOSURE_VALUE widget not found."); return None
         exposure_token = time.time_ns(); received_data = None
         with self._blob_lock: self._exposure_queue.put(exposure_token); self._received_blobs.pop(exposure_token, None)
         try: # Start exposure and wait for BLOB
@@ -746,7 +749,7 @@ class IndiController(PyIndi.BaseClient):
                  time.sleep(0.1)
              else: raise IOError(f"Timeout waiting for BLOB ({exposure_s:.3f}s exposure)")
         except Exception as e:
-             print(f"ERROR during capture for token {exposure_token}: {e}")
+             logger.error(f"ERROR during capture for token {exposure_token}: {e}")
              with self._blob_lock: self._received_blobs.pop(exposure_token, None)
              return None
         if received_data: # Save data
@@ -763,34 +766,33 @@ class IndiController(PyIndi.BaseClient):
                                 if off: ow=off.findWidgetByName("OFFSET"); hdr['OFFSET']=float(ow.value)
                                 if t: tw=t.findWidgetByName("CCD_TEMPERATURE_VALUE"); hdr['CCD-TEMP']=float(tw.value)
                             hdul.flush(output_verify='silentfix')
-                except Exception as e: print(f"Warning: FITS annotation failed: {e}")
+                except Exception as e: logger.warning(f"Warning: FITS annotation failed: {e}")
                 try: save_png_preview(save_path) # Generate PNG
-                except Exception as e: print(f"Warning: PNG preview failed: {e}")
+                except Exception as e: logger.warning(f"Warning: PNG preview failed: {e}")
                 return save_path
-            except Exception as e: print(f"Error saving BLOB data: {e}"); return None
-        else: print(f"Error: No BLOB data received for token {exposure_token}."); return None
+            except Exception as e: logger.error(f"Error saving BLOB data: {e}"); return None
+        else: logger.error(f"Error: No BLOB data received for token {exposure_token}."); return None
 
     def capture_sequence(self, icao: str, exposure_s: float, num_images: Optional[int] = None) -> List[str]:
         if num_images is None: num_images = int(CONFIG['capture'].get('num_sequence_images', 5))
         if num_images <= 0: return []
-        print(f"  Starting capture sequence of {num_images} images with exposure: {exposure_s:.4f}s"); paths = []; images_dir = os.path.join(LOG_DIR, 'images')
+        logger.info(f"  Starting capture sequence of {num_images} images with exposure: {exposure_s:.4f}s"); paths = []; images_dir = os.path.join(LOG_DIR, 'images')
         for i in range(num_images):
-            if self.shutdown_event and self.shutdown_event.is_set(): print("  Capture sequence interrupted."); break
+            if self.shutdown_event and self.shutdown_event.is_set(): logger.info("  Capture sequence interrupted."); break
             path = os.path.join(images_dir, f"capture_{icao}_{time.time_ns()}_{i+1}_of_{num_images}.fits")
             try:
                 captured_path = self.capture_image(exposure_s, path) # Calls patched capture_image
                 if captured_path: paths.append(captured_path)
-                else: print(f"  Frame {i+1}/{num_images} failed.")
-            except Exception as e: print(f"  Unexpected error capturing frame {i+1}: {e}"); break
+                else: logger.error(f"  Frame {i+1}/{num_images} failed.")
+            except Exception as e: logger.error(f"  Unexpected error capturing frame {i+1}: {e}"); break
         if paths:
             try:
                 cam_settings = {"gain": CONFIG['camera_specs'].get('gain'), "offset": CONFIG['camera_specs'].get('offset'), "binning": CONFIG['camera_specs'].get('binning', {"x":1,"y":1})}
                 sequence_id = f"{icao}_{int(time.time())}"; schedule_stack_and_publish(sequence_id, paths, cam_settings)
-                print(f"  Scheduled stacking for burst {sequence_id} ({len(paths)} frames)")
-            except Exception as e: print(f"Warning: could not schedule stacking: {e}")
+                logger.info(f"  Scheduled stacking for burst {sequence_id} ({len(paths)} frames)")
+            except Exception as e: logger.warning(f"Warning: could not schedule stacking: {e}")
         return paths
 
     def disconnect(self):
-        if CONFIG['development']['dry_run']: print("[DRY RUN] Simulating hardware disconnect."); return
-        if self.isConnected(): print("Disconnecting from INDI server..."); self.disconnectServer()
-
+        if CONFIG['development']['dry_run']: logger.info("[DRY RUN] Simulating hardware disconnect."); return
+        if self.isConnected(): logger.info("Disconnecting from INDI server..."); self.disconnectServer()

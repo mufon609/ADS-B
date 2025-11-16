@@ -8,7 +8,10 @@ import threading
 import time
 import tempfile
 import numpy as np
+import logging
 from config_loader import CONFIG, LOG_DIR
+
+logger = logging.getLogger(__name__)
 
 _status_lock = threading.Lock()
 _current_status_cache: dict = {"mode": "initializing"}
@@ -64,7 +67,7 @@ def write_status(status: dict):
             # Create a copy for writing (conversion already happened)
             status_to_write = _current_status_cache.copy()
         except Exception as e:
-             print(f"Error updating status cache: {e}")
+             logger.error(f"Error updating status cache: {e}")
              status_to_write = _current_status_cache.copy() if _current_status_cache else None
 
     if status_to_write: # Ensure we have data to write
@@ -87,7 +90,7 @@ def write_status(status: dict):
                 except OSError: pass # Ignore cleanup errors
         except Exception as e:
              # Print the specific error related to writing
-             print(f"Error writing status file '{path}': {e}")
+             logger.error(f"Error writing status file '{path}': {e}")
              # Optionally print the problematic dictionary for debugging
              # import sys
-             # print(f"Problematic status dict: {status_to_write}", file=sys.stderr)
+             # logger.error(f"Problematic status dict: {status_to_write}", file=sys.stderr)

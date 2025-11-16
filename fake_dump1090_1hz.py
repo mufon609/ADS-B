@@ -11,7 +11,10 @@ Usage:
   python fake_dump1090_1hz.py --out /home/dump/Desktop/gitRepo/dump1090/public_html/data/aircraft.json
 """
 
-import os, time, math, json, random, argparse
+import os, time, math, json, random, argparse, logging
+from logger_config import setup_logging
+
+logger = logging.getLogger(__name__)
 
 # ---------- helpers ----------
 def gc_step(lat_deg, lon_deg, heading_deg, distance_m):
@@ -87,7 +90,7 @@ def main():
         a["rssi"] = round(random.uniform(-31.0, -23.0), 1)
 
     total_messages = 8_089_782  # start near your snippet
-    print(f"[fake_dump1090_1hz] Writing to {out_path} at 1 Hz. Ctrl+C to stop.")
+    logger.info(f"[fake_dump1090_1hz] Writing to {out_path} at 1 Hz. Ctrl+C to stop.")
 
     # Align to the next whole second
     next_ts = math.floor(time.time()) + 1
@@ -193,7 +196,8 @@ def main():
             next_ts += 1
 
     except KeyboardInterrupt:
-        print("\n[fake_dump1090_1hz] Stopped.")
+        logger.info("\n[fake_dump1090_1hz] Stopped.")
 
 if __name__ == "__main__":
+    setup_logging()
     main()

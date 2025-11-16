@@ -15,6 +15,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from astropy.coordinates import EarthLocation
 import astropy.units as u
+import logging
 
 from config_loader import CONFIG, LOG_DIR
 from data_reader import read_aircraft_data
@@ -39,6 +40,9 @@ from image_analyzer import detect_aircraft
 from coord_utils import (calculate_plate_scale, latlonalt_to_azel, distance_km,  # <-- USE THE NEW NAME
                          get_sun_azel, angular_sep_deg, angular_speed_deg_s, get_altaz_frame)
 from stack_orchestrator import shutdown as shutdown_stack_orchestrator, request_shutdown
+from logger_config import setup_logging
+
+logger = logging.getLogger(__name__)
 
 
 def _to_img_url(fs_path: str) -> str:
@@ -69,7 +73,7 @@ class CommandHandler(FileSystemEventHandler):
 
     def _process_command(self):
         """Reads and processes the command file, handling race conditions."""
-        print("--- Manual command detected! ---")
+        logger.info("--- Manual command detected! ---")
         try:
             # Read command immediately after detection
             with open(self.command_file, 'r') as f:
@@ -78,15 +82,15 @@ class CommandHandler(FileSystemEventHandler):
             # Attempt to delete immediately to prevent reprocessing
             try:
                 os.remove(self.command_file)
-                print(f"  Processed and removed command file.")
+                logger.info(f"  Processed and removed command file.")
             except OSError as e:
                 # Handle case where file might already be gone (another handler?)
-                print(f"  Note: Could not remove command file (possibly already gone): {e}")
+                logger.warning(f"  Note: Could not remove command file (possibly already gone): {e}")
                 pass  # Continue processing the command we read
 
             if 'track_icao' in command:
                 icao = command['track_icao'].lower().strip()
-                print(f"  Manual override to track ICAO: {icao}")
+                logger.info(f"  Manual override to track ICAO: {icao}")
 
                 with self.main_handler.track_lock:
                     # Cancel any pending scheduled task
@@ -94,10 +98,10 @@ class CommandHandler(FileSystemEventHandler):
                         self.main_handler._scheduler_timer.cancel()
                         self.main_handler._scheduler_timer = None
                         self.main_handler.is_scheduler_waiting = False  # Reset flag (#6)
-                        print("  Cancelled pending scheduler timer.")
+                        logger.info("  Cancelled pending scheduler timer.")
                     # If currently tracking, request preemption
                     if self.main_handler.current_track_icao and self.main_handler.active_thread and self.main_handler.active_thread.is_alive():
-                        print("  Interrupting current track for manual override...")
+                        logger.info("  Interrupting current track for manual override...")
                         self.main_handler.preempt_requested = True
                         self.main_handler.shutdown_event.set()  # Signal current track to stop
                     # Set or replace the manual request
@@ -106,31 +110,31 @@ class CommandHandler(FileSystemEventHandler):
                     self.main_handler.manual_viability_info = None
                 # Immediately try to run scheduler with the new manual target
                 # (needs to happen outside the lock to avoid deadlock if scheduler needs lock)
-                print("  Triggering scheduler for manual target...")
+                logger.info("  Triggering scheduler for manual target...")
                 self.main_handler._run_scheduler()
 
             elif command.get('command') == 'abort_track':
-                print("  Abort command received.")
+                logger.info("  Abort command received.")
                 with self.main_handler.track_lock:
                     if self.main_handler._scheduler_timer and self.main_handler._scheduler_timer.is_alive():
                         self.main_handler._scheduler_timer.cancel()
                         self.main_handler._scheduler_timer = None
                         self.main_handler.is_scheduler_waiting = False  # Reset flag (#6)
-                        print("  Cancelled pending scheduler timer.")
+                        logger.info("  Cancelled pending scheduler timer.")
                     # Clear any manual target requests
                     self.main_handler.preempt_requested = False
                     self.main_handler.manual_target_icao = None
                     self.main_handler.manual_viability_info = None
                     # Signal current track (if any) to stop
                     if self.main_handler.current_track_icao:
-                        print(f"  Signalling current track ({self.main_handler.current_track_icao}) to abort.")
+                        logger.info(f"  Signalling current track ({self.main_handler.current_track_icao}) to abort.")
                         self.main_handler.shutdown_event.set()
                     else:
-                        print("  No active track to abort.")
+                        logger.info("  No active track to abort.")
 
 
             elif command.get('command') == 'park_mount':
-                print("  Park command received.")
+                logger.info("  Park command received.")
                 active_thread_to_join = None
                 with self.main_handler.track_lock:
                     # Cancel scheduler, clear manual target
@@ -143,34 +147,34 @@ class CommandHandler(FileSystemEventHandler):
                     self.main_handler.manual_viability_info = None
                     # Signal current track to stop and get reference for joining
                     if self.main_handler.current_track_icao:
-                        print(f"  Signalling current track ({self.main_handler.current_track_icao}) to stop before parking.")
+                        logger.info(f"  Signalling current track ({self.main_handler.current_track_icao}) to stop before parking.")
                         self.main_handler.shutdown_event.set()
                         active_thread_to_join = self.main_handler.active_thread
 
                 # Wait for tracking thread to finish (outside lock)
                 if active_thread_to_join and active_thread_to_join.is_alive():
-                    print("  Waiting for tracking thread to finish...")
+                    logger.info("  Waiting for tracking thread to finish...")
                     active_thread_to_join.join(timeout=10.0)  # Increased timeout
                     if active_thread_to_join.is_alive():
-                        print("  Warning: Tracking thread did not finish cleanly before parking.")
+                        logger.warning("  Warning: Tracking thread did not finish cleanly before parking.")
 
                 # Initiate parking in a separate thread (outside lock)
                 if self.main_handler.indi_controller:
-                    print("  Initiating park command...")
+                    logger.info("  Initiating park command...")
                     # Run park in its own thread so it doesn't block command handler
                     threading.Thread(target=self.main_handler.indi_controller.park_mount, daemon=True).start()
                 else:
-                    print("  Cannot park: Hardware controller not initialized.")
+                    logger.warning("  Cannot park: Hardware controller not initialized.")
 
 
         except FileNotFoundError:
             # This can happen in a race condition if file is deleted between event and open
-            print("  Command file not found (likely already processed or deleted). Ignoring.")
+            logger.info("  Command file not found (likely already processed or deleted). Ignoring.")
         except json.JSONDecodeError as e:
-            print(f"  Could not read command file (invalid JSON): {e}")
+            logger.warning(f"  Could not read command file (invalid JSON): {e}")
         except Exception as e:
             # Catch unexpected errors during command processing
-            print(f"  Unexpected error processing command: {e}")
+            logger.error(f"  Unexpected error processing command: {e}")
 
 
 class FileHandler(FileSystemEventHandler):
@@ -192,7 +196,7 @@ class FileHandler(FileSystemEventHandler):
             alt = float(obs_cfg['altitude_m'])
             self.observer_loc = EarthLocation(lat=lat * u.deg, lon=lon * u.deg, height=alt * u.m)
         except (ValueError, KeyError) as e:
-            print(f"FATAL: Invalid observer location in config: {e}")
+            logger.critical(f"FATAL: Invalid observer location in config: {e}")
             raise ValueError(f"Invalid observer location config: {e}") from e
 
         self.shutdown_event = threading.Event()  # Signals tracking thread to stop
@@ -216,7 +220,7 @@ class FileHandler(FileSystemEventHandler):
         Worker thread that runs blocking captures from the queue.
         This frees the main tracking loop from blocking I/O.
         """
-        print("  Capture worker thread started.")
+        logger.info("  Capture worker thread started.")
         while not self.shutdown_event.is_set():
             try:
                 # Wait for a job, but timeout to check shutdown_event
@@ -259,11 +263,11 @@ class FileHandler(FileSystemEventHandler):
                 continue
             except Exception as e:
                 # Log errors from the capture worker
-                print(f"  Capture worker error: {e}")
+                logger.error(f"  Capture worker error: {e}")
                 import traceback
                 traceback.print_exc()
 
-        print("  Capture worker thread shutting down.")
+        logger.info("  Capture worker thread shutting down.")
 
     def process_file(self):
         """Processes aircraft.json, runs the scheduler, and manages state."""
@@ -277,7 +281,7 @@ class FileHandler(FileSystemEventHandler):
         except FileNotFoundError:
             return
         except Exception as e:
-            print(f"Warning: Error stating file {self.watch_file}: {e}")
+            logger.warning(f"Warning: Error stating file {self.watch_file}: {e}")
             return
 
         current_time = time.time()
@@ -291,12 +295,12 @@ class FileHandler(FileSystemEventHandler):
         # --- Initialize Hardware (if not already) ---
         if not self.indi_controller:
             try:
-                print("Initializing hardware controller...")
+                logger.info("Initializing hardware controller...")
                 self.indi_controller = IndiController()
                 self.indi_controller.shutdown_event = self.shutdown_event
-                print("Hardware controller initialized.")
+                logger.info("Hardware controller initialized.")
             except Exception as e:
-                print(f"FATAL: Hardware initialization failed: {e}")
+                logger.critical(f"FATAL: Hardware initialization failed: {e}")
                 write_status({"mode": "error", "error_message": f"Hardware init failed: {e}"})
                 self.indi_controller = None
                 return
@@ -321,7 +325,7 @@ class FileHandler(FileSystemEventHandler):
         try:
             candidates = select_aircraft(aircraft_dict, current_az_el) or []
         except Exception as e:
-            print(f"Error during aircraft selection: {e}")
+            logger.error(f"Error during aircraft selection: {e}")
             candidates = []
 
         # Check for preemptive switch
@@ -330,7 +334,7 @@ class FileHandler(FileSystemEventHandler):
             preempt_factor = float(CONFIG['selection'].get('preempt_factor', 1.25))
             if new_best_target['icao'] != self.current_track_icao and \
                     new_best_target['ev'] > (self.current_track_ev * preempt_factor):
-                print(f"--- PREEMPTIVE SWITCH: New target {new_best_target['icao']} (EV {new_best_target['ev']:.1f}) "
+                logger.info(f"--- PREEMPTIVE SWITCH: New target {new_best_target['icao']} (EV {new_best_target['ev']:.1f}) "
                       f"> Current {self.current_track_icao} (EV {self.current_track_ev:.1f} * {preempt_factor:.2f}). ---")
                 with self.track_lock:
                     if self._scheduler_timer and self._scheduler_timer.is_alive():
@@ -411,15 +415,15 @@ class FileHandler(FileSystemEventHandler):
             if not pos_list: return None
             pos = pos_list[0]
             if not all(k in pos for k in ['est_lat', 'est_lon', 'est_alt']):
-                print("Warning: Prediction missing required keys (lat/lon/alt).")
+                logger.warning("Warning: Prediction missing required keys (lat/lon/alt).")
                 return None
             az, el = latlonalt_to_azel(pos['est_lat'], pos['est_lon'], pos['est_alt'], t, self.observer_loc)
             if not (math.isfinite(az) and math.isfinite(el)):
-                print(f"Warning: Non-finite az/el prediction ({az}, {el}).")
+                logger.warning(f"Warning: Non-finite az/el prediction ({az}, {el}).")
                 return None
             return (float(az), float(el))
         except Exception as e:
-            print(f"Error predicting target az/el: {e}")
+            logger.error(f"Error predicting target az/el: {e}")
             return None
 
 
@@ -442,14 +446,14 @@ class FileHandler(FileSystemEventHandler):
             if candidates is None:
                 aircraft_dict = read_aircraft_data()
                 if not self.indi_controller:
-                    print("  Scheduler: Cannot run, hardware controller not ready.")
+                    logger.warning("  Scheduler: Cannot run, hardware controller not ready.")
                     return
                 hs = self.indi_controller.get_hardware_status() or {}
                 current_az_el = hs.get("mount_az_el", (0.0, 0.0))
                 try:
                     candidates = select_aircraft(aircraft_dict, current_az_el) or []
                 except Exception as e:
-                    print(f"  Scheduler: Error selecting aircraft: {e}")
+                    logger.error(f"  Scheduler: Error selecting aircraft: {e}")
                     candidates = []
             else:
                 aircraft_dict = read_aircraft_data()
@@ -459,17 +463,17 @@ class FileHandler(FileSystemEventHandler):
 
             if self.manual_target_icao:
                 icao = self.manual_target_icao
-                print(f"  Scheduler: Evaluating manual target {icao}...")
+                logger.info(f"  Scheduler: Evaluating manual target {icao}...")
                 manual_target_in_candidates = next((c for c in candidates if c['icao'] == icao), None)
 
                 if manual_target_in_candidates:
-                    print(f"  Manual target {icao} is now viable (EV: {manual_target_in_candidates['ev']:.1f}). Selecting.")
+                    logger.info(f"  Manual target {icao} is now viable (EV: {manual_target_in_candidates['ev']:.1f}). Selecting.")
                     target_to_consider = manual_target_in_candidates
                     is_manual_override = True
                     self.manual_target_icao = None
                     self.manual_viability_info = None
                 else:
-                    print(f"  Manual target {icao} not in top candidates. Checking viability...")
+                    logger.info(f"  Manual target {icao} not in top candidates. Checking viability...")
                     ok, reasons, details = evaluate_manual_target_viability(
                         icao, aircraft_dict, observer_loc=self.observer_loc
                     )
@@ -494,7 +498,7 @@ class FileHandler(FileSystemEventHandler):
                                 if ev_reason_text not in reasons:
                                     reasons.append(ev_reason_text)
                         except Exception as e:
-                            print(f"  Warning: EV calculation failed for manual target {icao}: {e}")
+                            logger.warning(f"  Warning: EV calculation failed for manual target {icao}: {e}")
                             reasons.append("EV calculation failed")
 
                     self.manual_viability_info = {
@@ -502,12 +506,12 @@ class FileHandler(FileSystemEventHandler):
                         "reasons": reasons, "details": details, "ev": ev_val,
                     }
                     reason_str = "; ".join(reasons) if reasons else "basic checks passed, but EV <= 0 or not calculated"
-                    print(f"  Manual target {icao} not viable: {reason_str}. Will keep trying.")
+                    logger.info(f"  Manual target {icao} not viable: {reason_str}. Will keep trying.")
                     write_status({"manual_target": {"icao": icao, "viability": self.manual_viability_info}})
 
                     if not self._scheduler_timer or not self._scheduler_timer.is_alive():
                         retry_s = float(CONFIG.get('selection', {}).get('manual_retry_interval_s', 5.0))
-                        print(f"  Scheduling retry for manual target in {retry_s}s.")
+                        logger.info(f"  Scheduling retry for manual target in {retry_s}s.")
                         self.is_scheduler_waiting = True
                         self._scheduler_timer = threading.Timer(retry_s, self._run_scheduler_callback)  # Use callback
                         self._scheduler_timer.daemon = True
@@ -523,7 +527,7 @@ class FileHandler(FileSystemEventHandler):
             now = time.time()
             if not all(k in target_to_consider for k in ['intercept_time', 'start_state']) or \
                     not all(k in target_to_consider['start_state'] for k in ['time']):
-                print(f"  Scheduler: Target {target_to_consider['icao']} missing required timing data. Skipping.")
+                logger.warning(f"  Scheduler: Target {target_to_consider['icao']} missing required timing data. Skipping.")
                 return
 
             intercept_duration = target_to_consider['intercept_time']
@@ -539,7 +543,7 @@ class FileHandler(FileSystemEventHandler):
                 self._scheduler_timer = threading.Timer(wait_duration, self._run_scheduler_callback)  # Use callback
                 self._scheduler_timer.daemon = True
                 self._scheduler_timer.start()
-                print(f"  Scheduler: Waiting {wait_duration:.1f}s (of {delay_needed:.1f}s total) to start slew for {target_to_consider['icao']}.")
+                logger.info(f"  Scheduler: Waiting {wait_duration:.1f}s (of {delay_needed:.1f}s total) to start slew for {target_to_consider['icao']}.")
                 return
 
             # --- Start Tracking ---
@@ -551,7 +555,7 @@ class FileHandler(FileSystemEventHandler):
             icao_to_track = target_to_consider['icao']
             latest_data = read_aircraft_data().get(icao_to_track)
             if not latest_data:
-                print(f"  Scheduler: No current data for {icao_to_track} just before starting track; deferring.")
+                logger.info(f"  Scheduler: No current data for {icao_to_track} just before starting track; deferring.")
                 if not self._scheduler_timer or not self._scheduler_timer.is_alive():
                     self.is_scheduler_waiting = True
                     self._scheduler_timer = threading.Timer(2.0, self._run_scheduler_callback)  # Retry in 2s, use callback
@@ -568,7 +572,7 @@ class FileHandler(FileSystemEventHandler):
             self.captures_taken = 0
 
             write_status({"mode": "acquiring", "icao": icao_to_track})
-            print(f"  Scheduler: Starting track thread for {icao_to_track} (EV: {target_to_consider['ev']:.1f})")
+            logger.info(f"  Scheduler: Starting track thread for {icao_to_track} (EV: {target_to_consider['ev']:.1f})")
 
             start_state_info = target_to_consider['start_state'].copy()
             start_state_info['slew_duration_s'] = intercept_duration
@@ -594,18 +598,18 @@ class FileHandler(FileSystemEventHandler):
         """The main tracking logic thread."""
         try:
             if self.shutdown_event.is_set():
-                print(f"  Track [{icao}]: Aborted immediately before slew.")
+                logger.info(f"  Track [{icao}]: Aborted immediately before slew.")
                 return
 
             target_az = start_state.get('az')
             target_el = start_state.get('el')
             if target_az is None or target_el is None:
-                print(f"  Track [{icao}]: Invalid start state coordinates. Aborting.")
+                logger.error(f"  Track [{icao}]: Invalid start state coordinates. Aborting.")
                 return
 
             target_az_el = (target_az, target_el)
             write_status({"mode": "slewing", "target_az_el": list(target_az_el), "icao": icao})
-            print(f"  Track [{icao}]: Slewing to intercept point ({target_az:.2f}, {target_el:.2f})...")
+            logger.info(f"  Track [{icao}]: Slewing to intercept point ({target_az:.2f}, {target_el:.2f})...")
 
             def _slew_progress(cur_az: float, cur_el: float, state: str):
                 live_target_az_el = self._predict_target_az_el(aircraft_data, when=time.time()) or target_az_el
@@ -617,7 +621,7 @@ class FileHandler(FileSystemEventHandler):
                 write_status(payload)
 
             if not self.indi_controller.slew_to_az_el(target_az, target_el, progress_cb=_slew_progress):
-                print(f"  Track [{icao}]: Initial slew failed or aborted. Ending track.")
+                logger.error(f"  Track [{icao}]: Initial slew failed or aborted. Ending track.")
                 current_status = {"mode": "idle", "icao": None}
                 if self.manual_target_icao == icao:
                     current_status["manual_target"] = {
@@ -630,22 +634,22 @@ class FileHandler(FileSystemEventHandler):
                 return
 
             if self.shutdown_event.is_set():
-                print(f"  Track [{icao}]: Aborted after slew completion.")
+                logger.info(f"  Track [{icao}]: Aborted after slew completion.")
                 return
 
             current_alt_ft = aircraft_data.get('alt')
             write_status({"mode": "focusing", "autofocus_alt_ft": current_alt_ft, "icao": icao})
-            print(f"  Track [{icao}]: Performing autofocus...")
+            logger.info(f"  Track [{icao}]: Performing autofocus...")
             if not self.indi_controller.autofocus(current_alt_ft):
-                print(f"  Track [{icao}]: Autofocus failed. Ending track.")
+                logger.error(f"  Track [{icao}]: Autofocus failed. Ending track.")
                 write_status({"mode": "idle", "icao": None, "error_message": "Autofocus failed"})
                 return
 
             if self.shutdown_event.is_set():
-                print(f"  Track [{icao}]: Aborted after focus completion.")
+                logger.info(f"  Track [{icao}]: Aborted after focus completion.")
                 return
 
-            print(f"  Track [{icao}]: Starting optical guiding loop.")
+            logger.info(f"  Track [{icao}]: Starting optical guiding loop.")
             guide_cfg = CONFIG['capture'].get('guiding', {})
             calib_cfg = CONFIG.get('pointing_calibration', {})
             cam_specs = CONFIG.get('camera_specs', {})
@@ -702,20 +706,20 @@ class FileHandler(FileSystemEventHandler):
                             if k in latest_data:
                                 aircraft_data[k] = latest_data[k]
                     else:
-                        print(f"  Track [{icao}]: Target lost from ADS-B feed. Ending track.")
+                        logger.info(f"  Track [{icao}]: Target lost from ADS-B feed. Ending track.")
                         break
                     current_age = aircraft_data.get('age_s', float('inf'))
                     if current_age > 60.0:
-                        print(f"  Track [{icao}]: ADS-B data is too old ({current_age:.1f}s > 60s). Aborting track.")
+                        logger.warning(f"  Track [{icao}]: ADS-B data is too old ({current_age:.1f}s > 60s). Aborting track.")
                         break
                 except Exception as e:
-                    print(f"  Track [{icao}]: Error refreshing ADS-B data: {e}. Continuing with previous data.")
+                    logger.warning(f"  Track [{icao}]: Error refreshing ADS-B data: {e}. Continuing with previous data.")
 
                 iteration += 1
                 loop_start_time = time.time()
 
                 if self.shutdown_event.is_set():
-                    print(f"  Track [{icao}]: Shutdown signaled, exiting guide loop.")
+                    logger.info(f"  Track [{icao}]: Shutdown signaled, exiting guide loop.")
                     break
 
                 guide_path = None
@@ -731,14 +735,14 @@ class FileHandler(FileSystemEventHandler):
                             guide_data = _load_fits_data(guide_path)
                         else:
                             # Fallback if snap_image fails or file not found
-                            print(f"  Track [{icao}]: [DRY RUN] snap_image failed or file not found.")
+                            logger.warning(f"  Track [{icao}]: [DRY RUN] snap_image failed or file not found.")
                             sim_h = CONFIG.get('camera_specs', {}).get('resolution_height_px', 480)
                             sim_w = CONFIG.get('camera_specs', {}).get('resolution_width_px', 640)
                             guide_data = np.full((sim_h, sim_w), 1000, np.float32)  # Simple flat fallback
                         if guide_data is None:  # Final fallback
                             guide_data = np.full((480, 640), 1000, np.float32)
                     except Exception as e:
-                        print(f"  Track [{icao}]: [DRY RUN] Error simulating guide snap: {e}")
+                        logger.error(f"  Track [{icao}]: [DRY RUN] Error simulating guide snap: {e}")
                         sim_h = CONFIG.get('camera_specs', {}).get('resolution_height_px', 480)
                         sim_w = CONFIG.get('camera_specs', {}).get('resolution_width_px', 640)
                         guide_data = np.full((sim_h, sim_w), 1000, np.float32)
@@ -749,21 +753,21 @@ class FileHandler(FileSystemEventHandler):
                         if not guide_path:
                             raise RuntimeError("snap_image returned None or empty path")
                     except Exception as e:
-                        print(f"  Track [{icao}]: Guide frame {iteration} capture failed: {e}")
+                        logger.error(f"  Track [{icao}]: Guide frame {iteration} capture failed: {e}")
                         consecutive_losses += 1
                         if consecutive_losses >= max_losses: break
                         time.sleep(1.0);
                         continue
                     guide_data = _load_fits_data(guide_path)
                     if guide_data is None:
-                        print(f"  Track [{icao}]: Failed to load guide image data for {guide_path}. Skipping frame.")
+                        logger.warning(f"  Track [{icao}]: Failed to load guide image data for {guide_path}. Skipping frame.")
                         consecutive_losses += 1
                         if consecutive_losses >= max_losses: break
                         time.sleep(0.5);
                         continue
 
                 if guide_data is None:  # Handle case where guide_data failed to load/simulate
-                    print(f"  Track [{icao}]: guide_data is None. Skipping frame.")
+                    logger.warning(f"  Track [{icao}]: guide_data is None. Skipping frame.")
                     consecutive_losses += 1
                     if consecutive_losses >= max_losses: break
                     time.sleep(0.5);
@@ -781,9 +785,9 @@ class FileHandler(FileSystemEventHandler):
                             guide_png_path_generated = saved_png_path
                             guide_png_url = _to_img_url(guide_png_path_generated)
                         elif not CONFIG['development']['dry_run']:
-                            print(f"  Track [{icao}]: Warning - _save_png_preview_from_data did not return valid path.")
+                            logger.warning(f"  Track [{icao}]: Warning - _save_png_preview_from_data did not return valid path.")
                     except Exception as e:
-                        print(f"  Track [{icao}]: Warning - Error occurred during PNG creation/check: {e}")
+                        logger.warning(f"  Track [{icao}]: Warning - Error occurred during PNG creation/check: {e}")
 
                 # Use the simulated result on the first iteration, then do real detection
                 if iteration == 1 and simulated_detection_result:
@@ -796,7 +800,7 @@ class FileHandler(FileSystemEventHandler):
                     reason = (detection or {}).get('reason', 'unknown');
                     sharp = detection.get('sharpness', -1);
                     conf = detection.get('confidence', -1)
-                    print(f"  Track [{icao}]: Guide frame {iteration}: Target lost ({consecutive_losses}/{max_losses}). Reason: {reason} (Sharp: {sharp:.1f}, Conf: {conf:.2f})")
+                    logger.info(f"  Track [{icao}]: Guide frame {iteration}: Target lost ({consecutive_losses}/{max_losses}). Reason: {reason} (Sharp: {sharp:.1f}, Conf: {conf:.2f})")
                     write_status({"mode": "tracking", "icao": icao, "iteration": iteration, "stable": False, "last_guide_png": guide_png_url, "guide_offset_px": None})
                     if consecutive_losses >= max_losses: break
                     time.sleep(1.0);
@@ -805,7 +809,7 @@ class FileHandler(FileSystemEventHandler):
                 consecutive_losses = 0
                 center_px = detection['center_px']
                 if not (len(center_px) == 2 and math.isfinite(center_px[0]) and math.isfinite(center_px[1])):
-                    print(f"  Track [{icao}]: Invalid centroid coordinates received: {center_px}. Treating as lost.")
+                    logger.warning(f"  Track [{icao}]: Invalid centroid coordinates received: {center_px}. Treating as lost.")
                     consecutive_losses += 1
                     write_status({"mode": "tracking", "icao": icao, "iteration": iteration, "stable": False, "last_guide_png": guide_png_url})
                     time.sleep(0.5);
@@ -842,7 +846,7 @@ class FileHandler(FileSystemEventHandler):
                 try:
                     sun_az, sun_el = get_sun_azel(now, self.observer_loc)
                     est_list = estimate_positions_at_times(aircraft_data, [now, now + 1.0])
-                    if len(est_list) < 2: print(f"  Track [{icao}]: Could not predict motion for quality check. Ending track."); break
+                    if len(est_list) < 2: logger.error(f"  Track [{icao}]: Could not predict motion for quality check. Ending track."); break
                     current_pos_est, next_sec_pos_est = est_list[0], est_list[1]
                     current_az, current_el = latlonalt_to_azel(current_pos_est['est_lat'], current_pos_est['est_lon'], current_pos_est['est_alt'], now, self.observer_loc)
                     next_sec_az, next_sec_el = latlonalt_to_azel(next_sec_pos_est['est_lat'], next_sec_pos_est['est_lon'], next_sec_pos_est['est_alt'], now + 1.0, self.observer_loc)
@@ -852,10 +856,10 @@ class FileHandler(FileSystemEventHandler):
                     current_quality_state = {'el': current_el, 'sun_sep': current_sun_sep, 'range_km': current_range_km, 'ang_speed': ang_speed}
                     current_quality = calculate_quality(current_quality_state)
                     if current_quality < min_quality_threshold:
-                        print(f"  Track [{icao}]: Target quality ({current_quality:.2f}) dropped below threshold ({min_quality_threshold}). Ending track.")
+                        logger.info(f"  Track [{icao}]: Target quality ({current_quality:.2f}) dropped below threshold ({min_quality_threshold}). Ending track.")
                         break
                 except Exception as e:
-                    print(f"  Track [{icao}]: Error during live quality check: {e}. Ending track for safety.")
+                    logger.error(f"  Track [{icao}]: Error during live quality check: {e}. Ending track for safety.")
                     break
 
                 hardware_status = self.indi_controller.get_hardware_status() or {}
@@ -910,7 +914,7 @@ class FileHandler(FileSystemEventHandler):
                     pulse_sent = True
 
                 if pulse_sent:
-                    # if pulse_ms_x > 0 or pulse_ms_y > 0: print(f"    - Guide Pulses: X={pulse_ms_x}ms, Y={pulse_ms_y}ms")
+                    # if pulse_ms_x > 0 or pulse_ms_y > 0: logger.info(f"    - Guide Pulses: X={pulse_ms_x}ms, Y={pulse_ms_y}ms")
                     time.sleep(settle_s)
 
                 # This simulation logic is now handled inside the `is_stable` block for dry run
@@ -925,14 +929,14 @@ class FileHandler(FileSystemEventHandler):
                     # Before scheduling a new sequence, ensure we are not shutting down
                     if self.shutdown_event.is_set():
                         break
-                    print(f"  Track [{icao}]: Guiding stable. Capturing sequence...")
+                    logger.info(f"  Track [{icao}]: Guiding stable. Capturing sequence...")
                     capture_cfg = CONFIG['capture']
                     base_exposure = float(capture_cfg.get('sequence_exposure_s', 0.5))
 
                     # Estimate exposure adjustment using the guide frame data
                     # This now uses the "flat+text" image in dry run
                     exposure_factor = _estimate_exposure_adjustment_from_data(guide_data)
-                    print(f"    - Auto-exposure factor: {exposure_factor:.2f}")
+                    logger.info(f"    - Auto-exposure factor: {exposure_factor:.2f}")
 
                     adj_min = float(capture_cfg.get('exposure_adjust_factor_min', 0.2))
                     adj_max = float(capture_cfg.get('exposure_adjust_factor_max', 5.0))
@@ -957,7 +961,7 @@ class FileHandler(FileSystemEventHandler):
                         if limit_reason == "recommended" or t_max_blur < min_exp_limit: limit_reason = f"config_min ({min_exp_limit:.3f}s)"
                         final_exp = min_exp_limit
 
-                    print(f"    - Final sequence exposure: {final_exp:.4f}s (Reason: {limit_reason})")
+                    logger.info(f"    - Final sequence exposure: {final_exp:.4f}s (Reason: {limit_reason})")
 
                     last_seq_ts = time.time() # Set timestamp immediately
                     
@@ -983,7 +987,7 @@ class FileHandler(FileSystemEventHandler):
 
                     # Do not queue new sequences if shutdown has been signaled
                     if self.shutdown_event.is_set():
-                        print(f"  Track [{icao}]: Shutdown signaled, skipping sequence scheduling.")
+                        logger.info(f"  Track [{icao}]: Shutdown signaled, skipping sequence scheduling.")
                         break
                     # Put the job on the queue for the worker
                     job = (icao, final_exp, seq_log, captures_taken, status_payload_base)
@@ -1006,7 +1010,7 @@ class FileHandler(FileSystemEventHandler):
                 time.sleep(sleep_time)
 
         finally:
-            print(f"  Track [{icao}]: Exiting tracking thread.")
+            logger.info(f"  Track [{icao}]: Exiting tracking thread.")
             with self.track_lock:
                 was_preempted = self.preempt_requested
                 finished_icao = self.current_track_icao
@@ -1019,61 +1023,58 @@ class FileHandler(FileSystemEventHandler):
 
             final_status = {"mode": "idle", "icao": None}
             if was_aborted_by_signal and not was_preempted:
-                print(f"  Tracking for {finished_icao} was interrupted.")
+                logger.info(f"  Tracking for {finished_icao} was interrupted.")
                 if hasattr(self, 'manual_target_icao') and self.manual_target_icao == finished_icao:
                     final_status["manual_target"] = {"icao": finished_icao, "viability": {"viable": False, "reasons": ["track aborted"]}}
                 else:
                     final_status["manual_target"] = None
             elif was_preempted:
-                print(f"  Tracking for {finished_icao} preempted. Re-evaluating targets...")
+                logger.info(f"  Tracking for {finished_icao} preempted. Re-evaluating targets...")
                 final_status["manual_target"] = None
             else:
-                print(f"  Tracking for {finished_icao} finished normally. System idle.")
+                logger.info(f"  Tracking for {finished_icao} finished normally. System idle.")
                 final_status["manual_target"] = None
 
             write_status(final_status)
 
             if was_preempted or not was_aborted_by_signal:
-                print("  Triggering scheduler to find next target...")
+                logger.info("  Triggering scheduler to find next target...")
                 if not self.is_scheduler_waiting:
                     self._run_scheduler()
 
 
 if __name__ == "__main__":
-    import logging
-    import sys
-    logging.basicConfig(level=logging.INFO, stream=sys.stdout)
-
+    setup_logging()
     ensure_log_dir()
     adsb_watch_file = os.path.normpath(os.path.abspath(CONFIG['adsb']['json_file_path']))
     adsb_watch_path = os.path.dirname(adsb_watch_file)
     if not os.path.exists(adsb_watch_path): exit(1)
-    if not os.path.exists(adsb_watch_file): print(f"Warning: ADS-B file '{adsb_watch_file}' does not exist yet...")
+    if not os.path.exists(adsb_watch_file): logger.warning(f"Warning: ADS-B file '{adsb_watch_file}' does not exist yet...")
 
     event_handler = FileHandler(adsb_watch_file)
-    print("Performing initial read of aircraft data...")
+    logger.info("Performing initial read of aircraft data...")
     event_handler.process_file()
 
     # Check for and process command.json at startup
     command_filename = CONFIG['logging']['command_file']
     command_file_path = os.path.normpath(os.path.join(LOG_DIR, command_filename))
     if os.path.exists(command_file_path):
-        print(f"Found existing command file '{command_file_path}' at startup. Processing...")
+        logger.info(f"Found existing command file '{command_file_path}' at startup. Processing...")
         try:
             with open(command_file_path, 'r') as f:
                 command = json.load(f)
             if 'track_icao' in command:
                 icao = command['track_icao'].lower().strip()
-                print(f"  Manual override to track ICAO: {icao} from startup command.")
+                logger.info(f"  Manual override to track ICAO: {icao} from startup command.")
                 event_handler.manual_target_icao = icao
                 # Trigger scheduler to pick up the manual target
                 event_handler._run_scheduler()
             os.remove(command_file_path)
-            print("  Processed and removed startup command file.")
+            logger.info("  Processed and removed startup command file.")
         except (json.JSONDecodeError, OSError) as e:
-            print(f"  Error processing startup command file '{command_file_path}': {e}")
+            logger.warning(f"  Error processing startup command file '{command_file_path}': {e}")
         except Exception as e:
-            print(f"  Unexpected error during startup command processing: {e}")
+            logger.error(f"  Unexpected error during startup command processing: {e}")
 
     adsb_observer = Observer()
     adsb_observer.schedule(event_handler, path=adsb_watch_path, recursive=False)
@@ -1085,16 +1086,16 @@ if __name__ == "__main__":
     try:
         adsb_observer.start();
         command_observer.start()
-        print(f"Monitoring '{adsb_watch_path}' for ADS-B data...")
-        print(f"Monitoring '{LOG_DIR}' for command file '{CONFIG['logging']['command_file']}'...")
+        logger.info(f"Monitoring '{adsb_watch_path}' for ADS-B data...")
+        logger.info(f"Monitoring '{LOG_DIR}' for command file '{CONFIG['logging']['command_file']}'...")
         while True:
             if not adsb_observer.is_alive() or not command_observer.is_alive():
-                print("Error: Watchdog observer thread died. Exiting.")
+                logger.critical("Error: Watchdog observer thread died. Exiting.")
                 event_handler.shutdown_event.set();
                 break
             time.sleep(5)
     except KeyboardInterrupt:
-        print("\nShutdown requested (Ctrl+C)...")
+        logger.info("\nShutdown requested (Ctrl+C)...")
         # Signal all threads to stop and prevent new tracks from starting
         event_handler.shutdown_event.set()
         # Notify the stacking orchestrator not to accept any new jobs
@@ -1106,42 +1107,42 @@ if __name__ == "__main__":
         if event_handler._scheduler_timer and event_handler._scheduler_timer.is_alive():
             event_handler._scheduler_timer.cancel()
             event_handler.is_scheduler_waiting = False
-            print("Cancelled pending scheduler timer.")
+            logger.info("Cancelled pending scheduler timer.")
         # Wait briefly for the active tracking thread to finish
         active_thread = event_handler.active_thread
         if active_thread and active_thread.is_alive():
-            print("Waiting for tracking thread to finish...")
+            logger.info("Waiting for tracking thread to finish...")
             active_thread.join(timeout=15.0)
             if active_thread.is_alive():
-                print("Warning: Tracking thread did not exit cleanly.")
+                logger.warning("Warning: Tracking thread did not exit cleanly.")
         # Shut down the stack orchestrator early to prevent new jobs from being scheduled
         try:
             shutdown_stack_orchestrator()
         except Exception as e:
-            print(f"Warning: Error during stack orchestrator shutdown: {e}")
+            logger.warning(f"Warning: Error during stack orchestrator shutdown: {e}")
     except Exception as e:
-        print(f"FATAL: Unhandled exception in main loop: {e}")
+        logger.critical(f"FATAL: Unhandled exception in main loop: {e}")
         event_handler.shutdown_event.set()
         import traceback;
         traceback.print_exc()
     finally:
-        print("Stopping observers...")
+        logger.info("Stopping observers...")
         if adsb_observer.is_alive(): adsb_observer.stop()
         if command_observer.is_alive(): command_observer.stop()
         if event_handler.indi_controller:
-            print("Disconnecting hardware...")
+            logger.info("Disconnecting hardware...")
             try:
                 event_handler.indi_controller.disconnect()
             except Exception as e:
-                print(f"Warning: Error during hardware disconnect: {e}")
+                logger.warning(f"Warning: Error during hardware disconnect: {e}")
         try:
             if adsb_observer.is_alive(): adsb_observer.join(timeout=2.0)
             if command_observer.is_alive(): command_observer.join(timeout=2.0)
         except RuntimeError:
             pass
-        print("Shutting down stack orchestrator...")
+        logger.info("Shutting down stack orchestrator...")
         try:
             shutdown_stack_orchestrator()
         except Exception as e:
-            print(f"Warning: Error during stack orchestrator shutdown: {e}")
-        print("Program terminated.")
+            logger.warning(f"Warning: Error during stack orchestrator shutdown: {e}")
+        logger.info("Program terminated.")

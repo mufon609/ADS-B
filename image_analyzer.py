@@ -12,6 +12,9 @@ from astropy.visualization import ZScaleInterval, ImageNormalize
 import os
 from typing import Optional, Dict, Tuple
 from config_loader import CONFIG
+import logging
+
+logger = logging.getLogger(__name__)
 
 # === Internal Helper Functions ===
 
@@ -22,28 +25,28 @@ def _load_fits_data(image_path: str) -> Optional[np.ndarray]:
         with fits.open(image_path, memmap=False) as hdul:
             # Check if HDUList is valid and if the primary HDU exists
             if not hdul or len(hdul) == 0:
-                 print(f"Warning: Invalid or empty FITS file: {image_path}.")
+                 logger.warning(f"Warning: Invalid or empty FITS file: {image_path}.")
                  return None
             # Check if the data attribute itself exists and is not None
             img_data = hdul[0].data
             if img_data is None:
-                 print(f"Warning: No data found in primary HDU of {image_path}.")
+                 logger.warning(f"Warning: No data found in primary HDU of {image_path}.")
                  return None
 
         # Check dimensions AFTER confirming data is not None
         if img_data.ndim != 2:
-            print(f"Warning: Invalid data dimensions in {image_path}. Expected 2D, got {img_data.ndim}.")
+            logger.warning(f"Warning: Invalid data dimensions in {image_path}. Expected 2D, got {img_data.ndim}.")
             return None
 
         # Ensure data is float32 and handle non-finite values
         img_data = np.nan_to_num(img_data, copy=False).astype(np.float32)
         return img_data
     except FileNotFoundError:
-        print(f"Warning: FITS file not found: {image_path}")
+        logger.warning(f"Warning: FITS file not found: {image_path}")
         return None
     except Exception as e:
         # Catch other errors during FITS loading
-        print(f"Error loading FITS file {image_path}: {e}")
+        logger.error(f"Error loading FITS file {image_path}: {e}")
         return None
 
 def _normalize_zscale(image_data: np.ndarray) -> Optional[np.ndarray]:
@@ -51,7 +54,7 @@ def _normalize_zscale(image_data: np.ndarray) -> Optional[np.ndarray]:
     try:
         # Check for empty or non-numeric data before normalization
         if image_data.size == 0 or not np.issubdtype(image_data.dtype, np.number):
-             print("Warning: Cannot normalize empty or non-numeric data.")
+             logger.warning("Warning: Cannot normalize empty or non-numeric data.")
              return None
         # ZScale can fail on flat images, handle this
         min_val, max_val = np.nanmin(image_data), np.nanmax(image_data)
@@ -70,7 +73,7 @@ def _normalize_zscale(image_data: np.ndarray) -> Optional[np.ndarray]:
         # Ensure output is float32
         return normed_data.astype(np.float32)
     except Exception as e:
-        print(f"Error during ZScale normalization: {e}")
+        logger.error(f"Error during ZScale normalization: {e}")
         # Return zeros on error
         return np.zeros_like(image_data, dtype=np.float32)
 
@@ -84,7 +87,7 @@ def _normalize_to_8bit(normed_float_data: np.ndarray) -> Optional[np.ndarray]:
         img_8bit = cv2.normalize(normed_float_data, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
         return img_8bit
     except Exception as e:
-        print(f"Error converting to 8-bit: {e}")
+        logger.error(f"Error converting to 8-bit: {e}")
         return None
 
 # === Internal Processing Functions (operate on NumPy arrays) ===
@@ -107,7 +110,7 @@ def _measure_sharpness_from_data(image_data: np.ndarray) -> float:
              laplacian = np.nan_to_num(laplacian)
         return laplacian.var()
     except Exception as e:
-        print(f"Error calculating Laplacian variance: {e}")
+        logger.error(f"Error calculating Laplacian variance: {e}")
         return 0.0
 
 def _estimate_exposure_adjustment_from_data(image_data: np.ndarray) -> float:
@@ -122,7 +125,7 @@ def _estimate_exposure_adjustment_from_data(image_data: np.ndarray) -> float:
 
         finite_data = image_data[np.isfinite(image_data)]
         if finite_data.size == 0:
-             print("Warning: Exposure adjustment based on image with no finite pixels. Returning neutral.")
+             logger.warning("Warning: Exposure adjustment based on image with no finite pixels. Returning neutral.")
              return 1.0
 
         current_median = float(np.median(finite_data))
@@ -141,10 +144,10 @@ def _estimate_exposure_adjustment_from_data(image_data: np.ndarray) -> float:
 
         if saturated_pixels_fraction > 0.10:
             adjustment = min(adjustment, 0.5)
-            # print("  - Exposure Adjust: High saturation detected (>10%), reducing factor.") # Optional: less verbose
+            # logger.info("  - Exposure Adjust: High saturation detected (>10%), reducing factor.") # Optional: less verbose
         elif saturated_pixels_fraction > 0.01:
             adjustment = min(adjustment, 0.8)
-            # print("  - Exposure Adjust: Saturation detected (>1%), reducing factor slightly.")
+            # logger.info("  - Exposure Adjust: Saturation detected (>1%), reducing factor slightly.")
 
         adj_min = float(capture_cfg.get('exposure_adjust_factor_min', 0.1))
         adj_max = float(capture_cfg.get('exposure_adjust_factor_max', 10.0))
@@ -152,7 +155,7 @@ def _estimate_exposure_adjustment_from_data(image_data: np.ndarray) -> float:
 
         return final_adjustment
     except Exception as e:
-        print(f"Error estimating exposure adjustment: {e}")
+        logger.error(f"Error estimating exposure adjustment: {e}")
         return 1.0 # Return neutral factor on error
 
 def _detect_aircraft_from_data(image_data: np.ndarray, original_shape: Tuple[int, int], sim_initial_error_s: float = 0.0) -> Dict:
@@ -205,7 +208,7 @@ def _detect_aircraft_from_data(image_data: np.ndarray, original_shape: Tuple[int
             if target_w > 0 and target_h > 0:
                 img_8bit_scaled = cv2.resize(img_8bit_detect, (target_w, target_h), interpolation=cv2.INTER_AREA)
             else:
-                 print(f"Warning: Image scaling resulted in zero dimension (scale={scale}). Using original.")
+                 logger.warning(f"Warning: Image scaling resulted in zero dimension (scale={scale}). Using original.")
                  scale = 1.0
 
         std_dev = img_8bit_scaled.std()
@@ -277,7 +280,7 @@ def _detect_aircraft_from_data(image_data: np.ndarray, original_shape: Tuple[int
         return {'detected': True, 'center_px': (cx_full, cy_full), 'confidence': confidence, 'sharpness': sharpness}
 
     except Exception as e:
-        print(f"Error during aircraft detection: {e}")
+        logger.error(f"Error during aircraft detection: {e}")
         import traceback
         traceback.print_exc()
         return {'detected': False, 'reason': 'processing_error', 'error': str(e)}
@@ -300,7 +303,7 @@ def _save_png_preview_from_data(image_data: np.ndarray, png_path: str) -> str:
             raise IOError(f"Failed to write PNG file to {png_path} (cv2.imwrite returned False)")
         return png_path
     except Exception as e:
-        print(f"Error saving PNG preview to {png_path}: {e}")
+        logger.error(f"Error saving PNG preview to {png_path}: {e}")
         return ""
 
 # === Public Functions (operate on file paths) ===
@@ -334,7 +337,7 @@ def save_png_preview(fits_path: str, png_path_out: Optional[str] = None) -> str:
     Uses ZScale for real images, min-max for dry run.
     """
     if not os.path.exists(fits_path):
-        print(f"Warning: FITS file not found for PNG preview: {fits_path}")
+        logger.warning(f"Warning: FITS file not found for PNG preview: {fits_path}")
         return ""
 
     img_data = _load_fits_data(fits_path)

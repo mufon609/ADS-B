@@ -6,10 +6,14 @@ import json
 import statistics
 import bisect
 import os
+import logging
 from collections import defaultdict
 from typing import List
 from config_loader import CONFIG, LOG_DIR
 from coord_utils import distance_km
+from logger_config import setup_logging
+
+logger = logging.getLogger(__name__)
 
 def find_closest_actual(timestamps: List[float], target_time: float) -> int:
     """Finds the index of the closest timestamp in a sorted list using bisection."""
@@ -37,7 +41,7 @@ def calculate_errors() -> dict:
             loaded = json.load(f)
             predictions = loaded.get('data', loaded if isinstance(loaded, list) else [])
     except (FileNotFoundError, json.JSONDecodeError) as e:
-        print(f"Error reading or parsing log files: {e}")
+        logger.error(f"Error reading or parsing log files: {e}")
         return {}
 
     actuals_by_icao = defaultdict(list)
@@ -119,9 +123,10 @@ def calculate_errors() -> dict:
     return stats
 
 if __name__ == "__main__":
+    setup_logging()
     error_stats = calculate_errors()
     if error_stats:
-        print("Prediction Error Evaluation (in Nautical Miles):")
+        logger.info("Prediction Error Evaluation (in Nautical Miles):")
         # Sort the output numerically by the delta value for better readability
         try:
             sorted_items = sorted(
@@ -135,6 +140,6 @@ if __name__ == "__main__":
 
         for delta, s in sorted_items:
             # Format output nicely
-            print(f"  {delta:>9}: Mean={s['mean']:.4f}, Median={s['median']:.4f}, Max={s['max']:.4f}, Count={s['count']}")
+            logger.info(f"  {delta:>9}: Mean={s['mean']:.4f}, Median={s['median']:.4f}, Max={s['max']:.4f}, Count={s['count']}")
     else:
-        print("No valid prediction data found or logs missing to evaluate.")
+        logger.info("No valid prediction data found or logs missing to evaluate.")

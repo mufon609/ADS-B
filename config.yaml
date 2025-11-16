@@ -10,9 +10,11 @@ predictions:
   deltas_sec: [1, 2, 3, 5, 8, 13, 21, 34]
 
 logging:
-  log_dir: 'logs'
+  level: INFO
+  log_dir: "logs"
+  command_file: "command.json"
   log_max_size_mb: 25
-  command_file: 'command.json'
+  log_backup_count: 5
 
 observer:
   latitude_deg: 40.078653

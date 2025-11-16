@@ -4,11 +4,14 @@ Module for coordinate transformations and astronomical calculations.
 """
 import math
 from typing import Optional
+import logging
 from astropy.coordinates import EarthLocation, SkyCoord, AltAz, get_sun
 from astropy import units as u
 from astropy.time import Time
 from geopy.distance import geodesic
 from config_loader import CONFIG
+
+logger = logging.getLogger(__name__)
 
 def get_altaz_frame(observer_loc: EarthLocation) -> AltAz:
     """Creates an AltAz frame for the current time and observer location."""
@@ -64,7 +67,7 @@ def distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
         return float(dist) # Ensure return type is float
     except Exception as e:
         # Log error or handle cases where distance calculation might fail
-        print(f"Warning: Geodesic distance calculation failed between ({lat1},{lon1}) and ({lat2},{lon2}): {e}")
+        logger.warning(f"Warning: Geodesic distance calculation failed between ({lat1},{lon1}) and ({lat2},{lon2}): {e}")
         return float('inf') # Return infinity or another indicator of failure
 
 def get_sun_azel(timestamp: float, observer_loc: EarthLocation) -> tuple:
@@ -122,7 +125,7 @@ def solve_intercept_time(current_az_el: tuple, target_azel_func, max_rate_deg_s:
         except (TypeError, ValueError, AttributeError):
             # Handle potential errors from target_azel_func or angular_sep_deg
             # Treat errors as if no solution is likely
-             print(f"Warning: Exception in f(t) for t={t:.2f}. Treating as no solution.")
+             logger.warning(f"Warning: Exception in f(t) for t={t:.2f}. Treating as no solution.")
              return float('inf') # Return a value unlikely to cross zero correctly
 
     try:
@@ -136,7 +139,7 @@ def solve_intercept_time(current_az_el: tuple, target_azel_func, max_rate_deg_s:
             # Could mean no intercept, or intercept is outside [lo, hi]
             return None
     except Exception as e:
-         print(f"Warning: Error evaluating initial bounds for intercept solve: {e}")
+         logger.warning(f"Warning: Error evaluating initial bounds for intercept solve: {e}")
          return None # Error during initial evaluation
 
     # Bisection loop
@@ -148,11 +151,11 @@ def solve_intercept_time(current_az_el: tuple, target_azel_func, max_rate_deg_s:
         try:
             f_mid = f(mid)
             if not math.isfinite(f_mid): # Handle prediction failures mid-solve
-                 print(f"Warning: Non-finite result in intercept solve at t={mid:.2f}")
+                 logger.warning(f"Warning: Non-finite result in intercept solve at t={mid:.2f}")
                  # Cannot reliably continue bisection if function fails
                  return None # Abort solve
         except Exception as e:
-             print(f"Warning: Error during intercept solve iteration at t={mid:.2f}: {e}")
+             logger.warning(f"Warning: Error during intercept solve iteration at t={mid:.2f}: {e}")
              return None # Abort solve
 
         # Bisection logic
@@ -171,7 +174,7 @@ def solve_intercept_time(current_az_el: tuple, target_azel_func, max_rate_deg_s:
     # Final check: does the solution make sense? f(final_t) should be close to 0
     f_final = f(final_t)
     if not math.isfinite(f_final) or abs(f_final) > 0.5: # Allow tolerance (e.g., 0.5 seconds)
-        print(f"Warning: Intercept solution {final_t:.2f}s did not converge well (f={f_final:.2f}). No intercept likely.")
+        logger.warning(f"Warning: Intercept solution {final_t:.2f}s did not converge well (f={f_final:.2f}). No intercept likely.")
         return None
 
     return final_t

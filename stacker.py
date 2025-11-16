@@ -21,6 +21,7 @@ The module exposes two public entry points:
 from __future__ import annotations
 
 import os
+import logging
 from typing import List, Tuple, Dict, Optional
 
 import numpy as np
@@ -30,6 +31,8 @@ from astropy.stats import sigma_clipped_stats
 from concurrent.futures import ThreadPoolExecutor
 
 from image_analyzer import _load_fits_data, _detect_aircraft_from_data
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_to_png(arr: np.ndarray, lo_pct: float = 1.0, hi_pct: float = 99.0) -> np.ndarray:
@@ -81,7 +84,7 @@ def _load_and_center(paths: List[str]) -> Tuple[List[np.ndarray], List[Tuple[flo
         try:
             det = _detect_aircraft_from_data(img_data, original_shape=original_shape)
         except Exception as e:
-            print(f"  - Stacker: Detection function failed on frame {i+1} ({os.path.basename(p)}): {e}")
+            logger.error(f"  - Stacker: Detection function failed on frame {i+1} ({os.path.basename(p)}): {e}")
             det = None
         if det and det.get("detected") and det.get("center_px") is not None:
             ctr_candidate = det.get("center_px")
@@ -90,19 +93,19 @@ def _load_and_center(paths: List[str]) -> Tuple[List[np.ndarray], List[Tuple[flo
                     np.isfinite(ctr_candidate[0]) and np.isfinite(ctr_candidate[1])):
                 ctr = ctr_candidate
             else:
-                print(f"  - Stacker: Invalid center_px format in frame {i+1}: {ctr_candidate}. Skipping frame.")
+                logger.warning(f"  - Stacker: Invalid center_px format in frame {i+1}: {ctr_candidate}. Skipping frame.")
                 ctr = None
                 skipped += 1
         else:
             reason = det.get('reason', 'detection_failed') if det else 'load_failed_or_detect_exception'
-            print(f"  - Stacker: No valid detection in frame {i+1} ({os.path.basename(p)}). Reason: {reason}. Skipping frame.")
+            logger.warning(f"  - Stacker: No valid detection in frame {i+1} ({os.path.basename(p)}). Reason: {reason}. Skipping frame.")
             ctr = None
             skipped += 1
         if ctr is not None:
             images.append(img_data)
             centers.append(ctr)
     if skipped > 0:
-        print(f"  - Stacker: Skipped {skipped} / {len(paths)} frames due to load/detection issues.")
+        logger.info(f"  - Stacker: Skipped {skipped} / {len(paths)} frames due to load/detection issues.")
     return images, centers
 
 
@@ -115,7 +118,7 @@ def _align_images(images: List[np.ndarray], centers: List[Tuple[float, float]]) 
     aligned: List[np.ndarray] = []
     for img, ctr in zip(images, centers):
         if img.shape != (H, W):
-            print(f"  - Stacker: Shape mismatch (got {img.shape}, expected {(H, W)}), skipping frame.")
+            logger.warning(f"  - Stacker: Shape mismatch (got {img.shape}, expected {(H, W)}), skipping frame.")
             continue
         dx = ref_center[0] - ctr[0]
         dy = ref_center[1] - ctr[1]
@@ -293,7 +296,7 @@ def stack_images_multi(image_paths: List[str], output_dir: str, params: Dict) ->
         return saved_products, qc
     except Exception as e:
         import traceback
-        print(f"  - Stacker: Unhandled error in stack_images_multi: {e}")
+        logger.error(f"  - Stacker: Unhandled error in stack_images_multi: {e}")
         traceback.print_exc()
         qc["error"] = f"Unhandled exception: {e}"
         return products, qc
@@ -305,6 +308,6 @@ def stack_images(image_paths: List[str], output_dir: str, params: Dict) -> Tuple
     if qc.get("error") or not products.get("robust", {}).get("fits"):
         if not qc.get("error"):
             qc["error"] = "Robust FITS output missing after stacking."
-        print(f"  - Stacker (Legacy): Stacking failed. Reason: {qc.get('error', 'Unknown error')}" )
+        logger.error(f"  - Stacker (Legacy): Stacking failed. Reason: {qc.get('error', 'Unknown error')}" )
         return None, qc
     return products["robust"]["fits"], qc

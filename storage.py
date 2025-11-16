@@ -6,9 +6,12 @@ import json
 import os
 import time
 import threading
+import logging
 from typing import List, Dict, Any, Iterable
 from collections import defaultdict
 from config_loader import CONFIG, LOG_DIR
+
+logger = logging.getLogger(__name__)
 
 _file_locks = defaultdict(threading.Lock)
 
@@ -31,7 +34,7 @@ def _fsync_dir(dir_path: str):
             os.close(dir_fd)
     except Exception as e:
         # Log the error but don't crash if fsync fails (e.g., permissions, OS support)
-        # print(f"Warning: Could not fsync directory '{dir_path}': {e}")
+        # logger.warning(f"Warning: Could not fsync directory '{dir_path}': {e}")
         pass # Allow operation to continue even if directory sync fails
 
 def _read_log_object(file_path: str) -> Dict[str, Any]:
@@ -51,7 +54,7 @@ def _read_log_object(file_path: str) -> Dict[str, Any]:
             obj = json.loads(content)
     except (OSError, json.JSONDecodeError, UnicodeDecodeError) as e:
          # Log error if reading/parsing fails
-         # print(f"Warning: Error reading log file {file_path}: {e}. Starting fresh.")
+         # logger.warning(f"Warning: Error reading log file {file_path}: {e}. Starting fresh.")
          return _blank()
 
     # Basic structure validation and migration for old list-based format
@@ -72,10 +75,10 @@ def _rotate(file_path: str) -> str:
     backup_path = f"{file_path}.{int(time.time())}.{os.getpid()}.bak"
     try:
         os.rename(file_path, backup_path)
-        # print(f"Log file {os.path.basename(file_path)} rotated to {os.path.basename(backup_path)}")
+        # logger.info(f"Log file {os.path.basename(file_path)} rotated to {os.path.basename(backup_path)}")
         _fsync_dir(os.path.dirname(file_path)) # Sync directory after rename
     except OSError as e:
-        print(f"Error rotating log file {file_path}: {e}")
+        logger.error(f"Error rotating log file {file_path}: {e}")
         # Return original path if rotation fails? Or backup path even if rename failed?
         # Returning backup_path for consistency, though it might not exist.
     return backup_path
@@ -110,7 +113,7 @@ def append_to_json(datas: List[Dict[str, Any]], file_path: str):
     """Appends records to a JSON log file atomically, with pre-emptive rotation."""
     # Basic input validation
     if not isinstance(datas, list) or not datas or not all(isinstance(x, dict) for x in datas):
-        # print(f"Warning: Invalid input to append_to_json for {file_path}. Input must be a non-empty list of dicts.")
+        # logger.warning(f"Warning: Invalid input to append_to_json for {file_path}. Input must be a non-empty list of dicts.")
         return
 
     # Ensure target directory exists
@@ -118,7 +121,7 @@ def append_to_json(datas: List[Dict[str, Any]], file_path: str):
     try:
          os.makedirs(dir_path, exist_ok=True)
     except OSError as e:
-         print(f"Error: Could not create directory {dir_path} for log file {file_path}: {e}")
+         logger.error(f"Error: Could not create directory {dir_path} for log file {file_path}: {e}")
          return # Cannot proceed if directory creation fails
 
     # Get rotation threshold from config
@@ -159,7 +162,7 @@ def append_to_json(datas: List[Dict[str, Any]], file_path: str):
             _fsync_dir(dir_path)
         except Exception as e:
              # Log error if writing or replacing fails
-             print(f"Error writing log file {file_path}: {e}")
+             logger.error(f"Error writing log file {file_path}: {e}")
         finally:
             # Clean up the temporary file if it still exists (e.g., after an error)
             if os.path.exists(tmp_path):

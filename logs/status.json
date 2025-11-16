@@ -3,40 +3,40 @@
   "queue": [
     {
       "icao": "ad444d",
-      "ev": 0.32982083720477984,
-      "intercept_time": 1.016467809677124,
-      "slew_time": 1.016467809677124,
+      "ev": 0.28110399619367527,
+      "intercept_time": 0.632861852645874,
+      "slew_time": 0.632861852645874,
       "start_state": {
-        "az": 221.43064924069316,
-        "el": 17.584847832020454,
-        "sun_az": 181.62528057214163,
-        "sun_el": 31.236744623754408,
-        "time": 1763225322.536228,
-        "lat": 39.87680495447089,
-        "lon": -74.78488186311615,
-        "range_km": 30.319491287299048,
-        "sun_sep": 38.47939138425076,
-        "ang_speed": 0.14895115543660425
+        "az": 222.04771713804172,
+        "el": 15.037419088471944,
+        "sun_az": 191.06015970181375,
+        "sun_el": 30.25307048609504,
+        "time": 1763313803.1619987,
+        "lat": 39.843765391641476,
+        "lon": -74.82898875735523,
+        "range_km": 35.57402290755835,
+        "sun_sep": 32.233336236816776,
+        "ang_speed": 0.11076389110730704
       }
     }
   ],
   "track_candidates": [
     {
       "icao": "ad444d",
-      "ev": 0.32982083720477984,
-      "intercept_time": 1.016467809677124,
-      "slew_time": 1.016467809677124,
+      "ev": 0.28110399619367527,
+      "intercept_time": 0.632861852645874,
+      "slew_time": 0.632861852645874,
       "start_state": {
-        "az": 221.43064924069316,
-        "el": 17.584847832020454,
-        "sun_az": 181.62528057214163,
-        "sun_el": 31.236744623754408,
-        "time": 1763225322.536228,
-        "lat": 39.87680495447089,
-        "lon": -74.78488186311615,
-        "range_km": 30.319491287299048,
-        "sun_sep": 38.47939138425076,
-        "ang_speed": 0.14895115543660425
+        "az": 222.04771713804172,
+        "el": 15.037419088471944,
+        "sun_az": 191.06015970181375,
+        "sun_el": 30.25307048609504,
+        "time": 1763313803.1619987,
+        "lat": 39.843765391641476,
+        "lon": -74.82898875735523,
+        "range_km": 35.57402290755835,
+        "sun_sep": 32.233336236816776,
+        "ang_speed": 0.11076389110730704
       }
     }
   ],
@@ -44,26 +44,26 @@
     {
       "icao": "ad444d",
       "flight": "JBU772",
-      "alt": 31507.0,
+      "alt": 31514.0,
       "gs": 500.0,
       "track": 45.7,
-      "dist_nm": 17.319066088367943
+      "dist_nm": 20.11867174165895
     },
     {
       "icao": "a29982",
       "flight": "N/A",
-      "alt": 4152.0,
+      "alt": 3972.0,
       "gs": 73.8,
-      "track": 348.4,
-      "dist_nm": 22.70724275013744
+      "track": 344.4,
+      "dist_nm": 22.361396783911896
     },
     {
       "icao": "a81761",
       "flight": "N/A",
-      "alt": 30947.0,
+      "alt": 31013.0,
       "gs": 460.0,
       "track": 222.0,
-      "dist_nm": 35.78648415491631
+      "dist_nm": 37.92423871261066
     }
   ],
   "observer_loc": {
@@ -83,8 +83,8 @@
     }
   },
   "mount_az_el": [
-    223.17533826896138,
-    10.987411426458678
+    223.186204728445,
+    10.852590728708332
   ],
   "camera_temp": -10.1,
   "camera_cooler_power": 45.5,
@@ -97,50 +97,50 @@
   },
   "camera_gain": 100,
   "camera_offset": 50,
-  "updated_at": 1763225316.7651005,
+  "updated_at": 1763313797.7757118,
   "icao": null,
   "target_az_el": [
-    223.20371230041033,
-    10.89988570915987
+    223.23364399459197,
+    10.611942163991275
   ],
-  "autofocus_alt_ft": 31553.0,
+  "autofocus_alt_ft": 31594.0,
   "manual_target": null,
-  "iteration": 32,
+  "iteration": 22,
   "guide_offset_px": {
     "dx": 0.0,
     "dy": 0.0
   },
   "stable": true,
-  "last_guide_png": "/images/snap_ad444d_g32_1763225281675367501.png",
-  "last_guide_file": "snap_ad444d_g32_1763225281675367501.fits",
+  "last_guide_png": "/images/snap_ad444d_g22_1763313770016200663.png",
+  "last_guide_file": "snap_ad444d_g22_1763313770016200663.fits",
   "target_details": {
-    "lat": 39.81170715845272,
-    "lon": -74.87172588489439,
-    "alt": 31572.0,
+    "lat": 39.79097973926682,
+    "lon": -74.89937650712565,
+    "alt": 31887.0,
     "flight": "JBU772",
     "gs": 500.0,
     "track": 45.7
   },
   "sun_pos": {
-    "az": 181.43950793838462,
-    "el": 31.24029310181138
+    "az": 190.9127974262267,
+    "el": 30.27302222643108
   },
-  "sun_sep_target_deg": 41.827735256065374,
-  "sun_sep_mount_deg": 43.516902610186015,
+  "sun_sep_target_deg": 34.5223353994301,
+  "sun_sep_mount_deg": 35.70156764838515,
   "image_vitals": {
-    "sharpness": 3293791.3986067227,
+    "sharpness": 3198547.241996269,
     "confidence": 0.95
   },
-  "current_quality": 0.246,
-  "current_range_km": 40.7,
-  "captures_taken": 38,
+  "current_quality": 0.227,
+  "current_range_km": 44.0,
+  "captures_taken": 35,
   "sequence_exposure_s": 0.01,
   "sequence_meta": {
-    "ang_speed_deg_s": 0.07865916262474072,
+    "ang_speed_deg_s": 0.07221577437939376,
     "target_blur_px_limit": 1.0,
     "exposure_limit_reason": "config_min (0.010s)"
   },
-  "sequence_count": 3,
-  "last_capture_file": "capture_ad444d_1763225281831998598_3_of_5.fits",
-  "capture_png": "/images/capture_ad444d_1763225281831998598_3_of_5.png"
+  "sequence_count": 5,
+  "last_capture_file": "capture_ad444d_1763313770040526148_5_of_5.fits",
+  "capture_png": "/images/capture_ad444d_1763313770040526148_5_of_5.png"
 }

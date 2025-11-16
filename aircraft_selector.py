@@ -13,6 +13,7 @@ from __future__ import annotations
 import time
 from functools import lru_cache
 from typing import Dict, Any, Tuple, List, Optional
+import logging
 
 from astropy.coordinates import EarthLocation, AltAz
 from astropy.time import Time
@@ -30,6 +31,8 @@ from coord_utils import (
 )
 from config_loader import CONFIG
 from dead_reckoning import estimate_positions_at_times
+
+logger = logging.getLogger(__name__)
 
 # When USE_DISTANCE_ONLY is true, quality is based solely on distance.
 # Other factors serve as pass/fail checks.
@@ -120,10 +123,10 @@ def calculate_expected_value(current_az_el: tuple, icao: str, aircraft_data: dic
             # latlonalt_to_azel expects geometric altitude
             az, el = latlonalt_to_azel(pos['est_lat'], pos['est_lon'], alt_ft, pred_time, observer_loc)
             if not (np.isfinite(az) and np.isfinite(el)):  # Check for NaN/Inf from conversion
-                print(f"Warning: Non-finite az/el ({az},{el}) from latlonalt_to_azel for {icao} at t={t:.1f}")
+                logger.warning(f"Warning: Non-finite az/el ({az},{el}) from latlonalt_to_azel for {icao} at t={t:.1f}")
                 return None
         except Exception as e:
-            print(f"Warning: latlonalt_to_azel failed in predictor for {icao} at t={t:.1f}: {e}")
+            logger.warning(f"Warning: latlonalt_to_azel failed in predictor for {icao} at t={t:.1f}: {e}")
             return None  # Failed coordinate conversion
         sun_az, sun_el = get_sun_azel(pred_time, observer_loc)
         return {
@@ -197,7 +200,7 @@ def calculate_expected_value(current_az_el: tuple, icao: str, aircraft_data: dic
         else:
             ang_speed = float('inf')
     except Exception as e:
-        print(f"Warning: Angular speed calculation failed for {icao} at track start: {e}")
+        logger.warning(f"Warning: Angular speed calculation failed for {icao} at track start: {e}")
         ang_speed = float('inf')
     state['ang_speed'] = ang_speed
 
@@ -253,7 +256,7 @@ def select_aircraft(aircraft_dict: dict, current_mount_az_el: tuple) -> list:
                 candidates.append(result)
         except Exception as e:
             # Catch errors during EV calculation for a single aircraft
-            print(f"Warning: EV calculation failed unexpectedly for {icao}: {e}")
+            logger.warning(f"Warning: EV calculation failed unexpectedly for {icao}: {e}")
             continue  # Skip this aircraft if EV calculation fails
 
     # Sort candidates by EV score in descending order
@@ -372,7 +375,7 @@ def evaluate_manual_target_viability(
             if sun_sep < min_sun_sep_deg:
                 reasons.append(f"too close to Sun ({sun_sep:.1f}° < {min_sun_sep_deg:.1f}°)")
         except Exception as sun_e:
-            print(f"Warning: Sun separation calculation failed during manual check: {sun_e}")  # Log error
+            logger.warning(f"Warning: Sun separation calculation failed during manual check: {sun_e}")  # Log error
             details["sun_sep_deg"] = None  # Indicate failure
             pass
 

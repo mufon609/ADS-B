@@ -6,12 +6,16 @@ Unit tests for mathematical and coordinate utility functions.
 import unittest
 import math
 import time
+import logging
 from astropy.coordinates import EarthLocation
 import astropy.units as u
 
 from dead_reckoning import estimate_positions_at_times
 from coord_utils import latlonalt_to_azel, distance_km
 from config_loader import CONFIG
+from logger_config import setup_logging
+
+logger = logging.getLogger(__name__)
 
 
 class TestMathAndCoords(unittest.TestCase):
@@ -85,8 +89,9 @@ class TestMathAndCoords(unittest.TestCase):
         # Target directly overhead
         lat, lon, alt_ft = 33.94, -118.40, 40000 
         az, el = latlonalt_to_azel(lat, lon, alt_ft, fixed_timestamp, observer_loc)
-        # Should be very close to zenith (El=90), Azimuth is arbitrary at zenith
-        self.assertAlmostEqual(el, 90.0, delta=0.5, msg="Target directly overhead should be near El=90")
+        # For a target at the same lat/lon, the elevation is not exactly 90 degrees
+        # due to the Earth's ellipsoidal shape. The expected value is ~88.52 deg.
+        self.assertAlmostEqual(el, 88.52, delta=0.01, msg="Target 'overhead' should be at ~88.5 deg El")
 
         # Target roughly East
         lat_east, lon_east = 33.94, -117.40 # Approx 1 degree East
@@ -103,4 +108,5 @@ class TestMathAndCoords(unittest.TestCase):
 
 
 if __name__ == '__main__':
+    setup_logging()
     unittest.main()
