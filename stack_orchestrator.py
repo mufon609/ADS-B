@@ -10,12 +10,14 @@ robust and anomaly stacks concurrently.
 
 from __future__ import annotations
 
-import os
 import json
-import time
 import logging
+import os
+import threading
+import time
+import traceback
 from concurrent.futures import ThreadPoolExecutor
-from typing import List, Dict, Optional
+from typing import Dict, List, Optional
 
 from config_loader import CONFIG, LOG_DIR
 from stacker import stack_images
@@ -24,12 +26,14 @@ logger = logging.getLogger(__name__)
 
 # Global executor shared across all stacking requests
 _executor: Optional[ThreadPoolExecutor] = None
+_executor_lock = threading.Lock()
 
 # Indicates that shutdown has been requested. When true, no new stacking jobs
 # will be accepted. This flag is set by ``shutdown()`` or explicitly via
 # ``request_shutdown()``.  Existing queued jobs will still run to
 # completion.
 _shutdown_requested: bool = False
+
 
 def request_shutdown() -> None:
     """Mark that the orchestrator should not accept any new stacking jobs."""
@@ -41,10 +45,12 @@ def _ensure_executor() -> None:
     """Initializes the background thread pool based on the config."""
     global _executor
     if _executor is None:
-        stacking_cfg = CONFIG.get('stacking', {})
-        max_workers = int(stacking_cfg.get('num_workers', 1))
-        # Ensure at least one worker
-        _executor = ThreadPoolExecutor(max_workers=max(1, max_workers))
+        with _executor_lock:
+            if _executor is None:  # Double-checked locking
+                stacking_cfg = CONFIG.get('stacking', {})
+                max_workers = int(stacking_cfg.get('num_workers', 1))
+                # Ensure at least one worker
+                _executor = ThreadPoolExecutor(max_workers=max(1, max_workers))
 
 
 def _rel_to_logs_url(path: str) -> Optional[str]:
@@ -83,7 +89,8 @@ def schedule_stack_and_publish(sequence_id: str, image_paths: List[str], capture
     # caller should ensure shutdown is coordinated.
     if _executor:
         try:
-            _executor.submit(_run_stacking_pipeline, sequence_id, image_paths, capture_meta)
+            _executor.submit(_run_stacking_pipeline,
+                             sequence_id, image_paths, capture_meta)
         except RuntimeError:
             # If the executor is shut down, ignore new tasks
             pass
@@ -107,7 +114,8 @@ def _run_stacking_pipeline(sequence_id: str, image_paths: List[str], capture_met
     """
     try:
         icao = _derive_icao(sequence_id)
-        logger.info(f"  Orchestrator: Starting background stacking for sequence {sequence_id} (ICAO: {icao})")
+        logger.info(
+            f"  Orchestrator: Starting background stacking for sequence {sequence_id} (ICAO: {icao})")
         # Create output directories
         aircraft_dir = os.path.join(LOG_DIR, "stack", icao)
         out_dir = os.path.join(aircraft_dir, sequence_id)
@@ -117,10 +125,12 @@ def _run_stacking_pipeline(sequence_id: str, image_paths: List[str], capture_met
         master_fits, qc = stack_images(image_paths, out_dir, params)
         # Determine status
         if not master_fits or qc.get("error"):
-            logger.error(f"  Orchestrator: Stacking failed for sequence {sequence_id}. Reason: {qc.get('error', 'Unknown')}")
+            logger.error(
+                f"  Orchestrator: Stacking failed for sequence {sequence_id}. Reason: {qc.get('error', 'Unknown')}")
             qc["status"] = "failed"
         else:
-            logger.info(f"  Orchestrator: Stacking complete for sequence {sequence_id}.")
+            logger.info(
+                f"  Orchestrator: Stacking complete for sequence {sequence_id}.")
             qc["status"] = qc.get("status", "success")
         # Build manifest
         manifest = {
@@ -145,8 +155,8 @@ def _run_stacking_pipeline(sequence_id: str, image_paths: List[str], capture_met
         with open(manifest_path, "w") as f:
             json.dump(manifest, f, indent=2)
     except Exception as e:
-        logger.error(f"  Orchestrator: Unhandled exception in stacking worker: {e}")
-        import traceback
+        logger.error(
+            f"  Orchestrator: Unhandled exception in stacking worker: {e}")
         traceback.print_exc()
 
 

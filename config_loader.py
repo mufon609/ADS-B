@@ -11,10 +11,11 @@ variable.  After loading, a few paths are expanded to absolute paths and
 the logging directories are created if necessary.
 """
 
+import logging
 import os
 import sys
+
 import yaml
-import logging
 
 
 class ConfigError(RuntimeError):

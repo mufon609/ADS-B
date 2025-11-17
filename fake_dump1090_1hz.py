@@ -11,7 +11,13 @@ Usage:
   python fake_dump1090_1hz.py --out /home/dump/Desktop/gitRepo/dump1090/public_html/data/aircraft.json
 """
 
-import os, time, math, json, random, argparse, logging
+import argparse
+import json
+import logging
+import math
+import os
+import random
+import time
 from logger_config import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -25,7 +31,8 @@ def gc_step(lat_deg, lon_deg, heading_deg, distance_m):
     R = 6371000.0
     if distance_m == 0:
         return lat_deg, lon_deg
-    lat1 = math.radians(lat_deg); lon1 = math.radians(lon_deg)
+    lat1 = math.radians(lat_deg)
+    lon1 = math.radians(lon_deg)
     brng = math.radians(heading_deg % 360.0)
     ang = distance_m / R
     sin_lat2 = math.sin(lat1)*math.cos(ang) + math.cos(lat1)*math.sin(ang)*math.cos(brng)
@@ -35,9 +42,17 @@ def gc_step(lat_deg, lon_deg, heading_deg, distance_m):
     lon2 = ((math.degrees(lon2) + 540.0) % 360.0) - 180.0
     return math.degrees(lat2), lon2
 
-def clamp(x, lo, hi): return lo if x < lo else hi if x > hi else x
+def clamp(x, lo, hi):
+    """Clamps a value to the inclusive range [lo, hi]."""
+    if x < lo:
+        return lo
+    elif x > hi:
+        return hi
+    else:
+        return x
 
 def atomic_write(path, payload_str):
+    """Writes a string to a path atomically to prevent race conditions."""
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
         f.write(payload_str)
@@ -45,6 +60,7 @@ def atomic_write(path, payload_str):
 
 # ---------- main ----------
 def main():
+    """Main entry point for the fake dump1090 generator."""
     ap = argparse.ArgumentParser(description="Fake dump1090 (1 Hz) aircraft.json generator")
     ap.add_argument("--out", default="data/aircraft.json",
                     help="Output aircraft.json path")

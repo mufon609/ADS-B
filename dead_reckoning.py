@@ -2,18 +2,20 @@
 """
 Module for predicting future aircraft positions using dead reckoning.
 """
-from typing import List, Dict
 import math
+from typing import Dict, List
+
 from geopy.distance import geodesic
 from geopy.point import Point
+
 from config_loader import CONFIG
 
 def _finite_or(default: float, *vals) -> float:
     """Return the first finite value from vals, else default."""
     for v in vals:
         try:
-            if math.isfinite(float(v)):
-                return float(v)
+                    if math.isfinite(float(v)):
+                        return float(v)
         except (TypeError, ValueError):
             pass
     return float(default) if default is not None else None
@@ -29,8 +31,6 @@ def _predict(start_lat, start_lon, start_alt, gs_kts, track_deg, vert_rate_fpm, 
     gs_kts = _finite_or(None, gs_kts)
     track_deg = _finite_or(None, track_deg)
     delta_seconds = _finite_or(None, delta_seconds)
-    if None in (start_lat, start_lon, start_alt, gs_kts, track_deg, delta_seconds):
-        return None
 
     # Constants
     KTS_TO_KMH = 1.852

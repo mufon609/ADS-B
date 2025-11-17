@@ -1,4 +1,4 @@
-#aircraft_selector.py
+# aircraft_selector.py
 """
 Module for selecting the best aircraft to track using an Expected Value model.
 
@@ -10,26 +10,26 @@ that the distance-only logic is hard-coded.
 
 from __future__ import annotations
 
+import logging
 import time
 from functools import lru_cache
-from typing import Dict, Any, Tuple, List, Optional
-import logging
+from typing import Any, Dict, List, Optional, Tuple
 
-from astropy.coordinates import EarthLocation, AltAz
-from astropy.time import Time
 import astropy.units as u
 import numpy as np
+from astropy.coordinates import AltAz, EarthLocation
+from astropy.time import Time
 
+from config_loader import CONFIG
 from coord_utils import (
-    get_altaz_frame,
-    latlonalt_to_azel,
-    distance_km,
-    get_sun_azel,
-    solve_intercept_time,
     angular_sep_deg,
     angular_speed_deg_s,
+    distance_km,
+    get_altaz_frame,
+    get_sun_azel,
+    latlonalt_to_azel,
+    solve_intercept_time,
 )
-from config_loader import CONFIG
 from dead_reckoning import estimate_positions_at_times
 
 logger = logging.getLogger(__name__)
@@ -121,12 +121,15 @@ def calculate_expected_value(current_az_el: tuple, icao: str, aircraft_data: dic
             return None  # Cannot proceed without predicted altitude
         try:
             # latlonalt_to_azel expects geometric altitude
-            az, el = latlonalt_to_azel(pos['est_lat'], pos['est_lon'], alt_ft, pred_time, observer_loc)
+            az, el = latlonalt_to_azel(
+                pos['est_lat'], pos['est_lon'], alt_ft, pred_time, observer_loc)
             if not (np.isfinite(az) and np.isfinite(el)):  # Check for NaN/Inf from conversion
-                logger.warning(f"Warning: Non-finite az/el ({az},{el}) from latlonalt_to_azel for {icao} at t={t:.1f}")
+                logger.warning(
+                    f"Warning: Non-finite az/el ({az},{el}) from latlonalt_to_azel for {icao} at t={t:.1f}")
                 return None
         except Exception as e:
-            logger.warning(f"Warning: latlonalt_to_azel failed in predictor for {icao} at t={t:.1f}: {e}")
+            logger.warning(
+                f"Warning: latlonalt_to_azel failed in predictor for {icao} at t={t:.1f}: {e}")
             return None  # Failed coordinate conversion
         sun_az, sun_el = get_sun_azel(pred_time, observer_loc)
         return {
@@ -148,16 +151,21 @@ def calculate_expected_value(current_az_el: tuple, icao: str, aircraft_data: dic
     max_slew_rate = hw_cfg.get('max_slew_deg_s', 6.0)
     if max_slew_rate <= 0:
         max_slew_rate = 6.0  # Ensure positive rate
-    intercept_time = solve_intercept_time(current_az_el, target_azel_func, max_slew_rate, frame)  # Pass frame
+    intercept_time = solve_intercept_time(
+        current_az_el, target_azel_func, max_slew_rate, frame)  # Pass frame
 
     if intercept_time is None:
         return {'icao': icao, 'ev': 0, 'reason': 'no_intercept'}
 
     # Define parameters for EV integration window
-    start_margin = float(ev_cfg.get('start_margin_s', 5.0))  # Time after intercept to start tracking
-    t_horizon = float(ev_cfg.get('horizon_s', 180.0))        # How far into the future to evaluate
-    dt = float(ev_cfg.get('dt_s', 2.0))                      # Time step for integration
-    min_q = float(ev_cfg.get('min_quality', 0.1))            # Minimum quality threshold to continue tracking
+    # Time after intercept to start tracking
+    start_margin = float(ev_cfg.get('start_margin_s', 5.0))
+    # How far into the future to evaluate
+    t_horizon = float(ev_cfg.get('horizon_s', 180.0))
+    # Time step for integration
+    dt = float(ev_cfg.get('dt_s', 2.0))
+    # Minimum quality threshold to continue tracking
+    min_q = float(ev_cfg.get('min_quality', 0.1))
 
     # Check if the intercept happens too late
     track_start_time_rel = intercept_time + start_margin
@@ -179,7 +187,8 @@ def calculate_expected_value(current_az_el: tuple, icao: str, aircraft_data: dic
     state['range_km'] = dist_km
 
     # Use frame valid for this specific time for separation calcs
-    frame_t = AltAz(obstime=Time(state['time'], format='unix'), location=observer_loc)
+    frame_t = AltAz(obstime=Time(
+        state['time'], format='unix'), location=observer_loc)
     state['sun_sep'] = angular_sep_deg(
         (state['az'], state['el']),
         (state['sun_az'], state['sun_el']),
@@ -200,7 +209,8 @@ def calculate_expected_value(current_az_el: tuple, icao: str, aircraft_data: dic
         else:
             ang_speed = float('inf')
     except Exception as e:
-        logger.warning(f"Warning: Angular speed calculation failed for {icao} at track start: {e}")
+        logger.warning(
+            f"Warning: Angular speed calculation failed for {icao} at track start: {e}")
         ang_speed = float('inf')
     state['ang_speed'] = ang_speed
 
@@ -256,7 +266,8 @@ def select_aircraft(aircraft_dict: dict, current_mount_az_el: tuple) -> list:
                 candidates.append(result)
         except Exception as e:
             # Catch errors during EV calculation for a single aircraft
-            logger.warning(f"Warning: EV calculation failed unexpectedly for {icao}: {e}")
+            logger.warning(
+                f"Warning: EV calculation failed unexpectedly for {icao}: {e}")
             continue  # Skip this aircraft if EV calculation fails
 
     # Sort candidates by EV score in descending order
@@ -288,18 +299,22 @@ def evaluate_manual_target_viability(
         observer_loc = _observer_location_from_config()
 
     reasons: List[str] = []
-    details: Dict[str, Any] = {"icao": icao, "viable": False}  # Default to not viable
+    details: Dict[str, Any] = {"icao": icao,
+                               "viable": False}  # Default to not viable
 
     # Load configuration thresholds
     sel_cfg = CONFIG.get('selection', {})
-    max_age_s = float(sel_cfg.get('manual_max_age_s', 15.0))  # Stricter age for manual check?
+    max_age_s = float(sel_cfg.get('manual_max_age_s', 15.0)
+                      )  # Stricter age for manual check?
     min_el_sel = float(sel_cfg.get('min_elevation_deg', 10.0))
     min_sun_sep_deg = float(sel_cfg.get('min_sun_separation_deg', 15.0))
     max_range_nm_cfg = float(sel_cfg.get('max_range_nm', 120.0))
 
     hw_cfg = CONFIG.get('hardware', {})
-    min_el_hw = float(hw_cfg.get('min_el_deg', min_el_sel))  # Use hardware min if stricter
-    max_el_hw = float(hw_cfg.get('max_el_deg', 90.0))      # Hardware max elevation
+    min_el_hw = float(hw_cfg.get('min_el_deg', min_el_sel)
+                      )  # Use hardware min if stricter
+    max_el_hw = float(hw_cfg.get('max_el_deg', 90.0)
+                      )      # Hardware max elevation
 
     # Check if aircraft exists in the latest data
     ac = aircraft_dict.get(icao)
@@ -316,7 +331,8 @@ def evaluate_manual_target_viability(
     if age_s is not None:
         details["age_s"] = round(age_s, 1)
         if age_s > max_age_s:
-            reasons.append(f"position too old ({age_s:.0f}s > {max_age_s:.0f}s)")
+            reasons.append(
+                f"position too old ({age_s:.0f}s > {max_age_s:.0f}s)")
     else:
         reasons.append("no valid age ('age_s' missing or invalid)")
 
@@ -341,7 +357,8 @@ def evaluate_manual_target_viability(
         dist_nm = dist_km / 1.852
         details["range_nm"] = round(dist_nm, 1)
         if dist_nm > max_range_nm_cfg:
-            reasons.append(f"outside range limit ({dist_nm:.1f}nm > {max_range_nm_cfg:.1f}nm)")
+            reasons.append(
+                f"outside range limit ({dist_nm:.1f}nm > {max_range_nm_cfg:.1f}nm)")
 
     # Check Altitude Data (should be alt_geom)
     alt_ft = ac.get("alt")
@@ -361,21 +378,27 @@ def evaluate_manual_target_viability(
         # Elevation constraints (check against effective min and hardware max)
         min_el_req = max(min_el_sel, min_el_hw)
         if el < min_el_req:
-            reasons.append(f"below min elevation ({el:.1f}° < {min_el_req:.1f}°)")
+            reasons.append(
+                f"below min elevation ({el:.1f}° < {min_el_req:.1f}°)")
         if el > max_el_hw:
-            reasons.append(f"above max elevation ({el:.1f}° > {max_el_hw:.1f}°)")
+            reasons.append(
+                f"above max elevation ({el:.1f}° > {max_el_hw:.1f}°)")
 
         # Sun avoidance
         try:
             sun_az, sun_el = get_sun_azel(now, observer_loc)
             # Use frame valid for the 'now' timestamp
-            frame_now = AltAz(obstime=Time(now, format='unix'), location=observer_loc)
+            frame_now = AltAz(obstime=Time(
+                now, format='unix'), location=observer_loc)
             sun_sep = angular_sep_deg((az, el), (sun_az, sun_el), frame_now)
             details["sun_sep_deg"] = round(sun_sep, 2)
             if sun_sep < min_sun_sep_deg:
-                reasons.append(f"too close to Sun ({sun_sep:.1f}° < {min_sun_sep_deg:.1f}°)")
+                reasons.append(
+                    f"too close to Sun ({sun_sep:.1f}° < {min_sun_sep_deg:.1f}°)")
         except Exception as sun_e:
-            logger.warning(f"Warning: Sun separation calculation failed during manual check: {sun_e}")  # Log error
+            logger.warning(
+                # Log error
+                f"Warning: Sun separation calculation failed during manual check: {sun_e}")
             details["sun_sep_deg"] = None  # Indicate failure
             pass
 

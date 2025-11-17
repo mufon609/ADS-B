@@ -4,9 +4,10 @@ Module for reading and parsing aircraft.json from dump1090.
 """
 
 import json
-import time
-import os
 import logging
+import os
+import time
+
 from config_loader import CONFIG
 
 logger = logging.getLogger(__name__)
@@ -57,21 +58,16 @@ def read_aircraft_data() -> dict:
         # Get the 'now' timestamp from *within* the file.
         file_time = _to_float(data.get('now'))
         if file_time is None:
-             logger.warning(f"Warning: Missing or invalid 'now' timestamp in {os.path.basename(file_path)}. Skipping.")
-             return {}
+            logger.warning(f"Warning: Missing or invalid 'now' timestamp in {os.path.basename(file_path)}. Skipping.")
+            return {}
         # We no longer compare file_time to time.time(). We trust the file's 'now'.
 
         aircraft_dict = {}
-        processed_count = 0
-        skipped_stale = 0
-        skipped_invalid = 0
-        skipped_alt = 0
 
         for ac in data.get('aircraft', []):
             icao_raw = ac.get('hex')
             icao = (str(icao_raw).strip().lower() if icao_raw else None)
             if not icao:
-                skipped_invalid += 1
                 continue
 
             # Calculate age relative to the file's 'now' timestamp
@@ -85,7 +81,6 @@ def read_aircraft_data() -> dict:
 
             # Check age validity against MAX_AIRCRAFT_STALENESS_S
             if age is None or age > MAX_AIRCRAFT_STALENESS_S:
-                skipped_stale += 1
                 continue
 
             # Extract and validate fields
@@ -93,7 +88,8 @@ def read_aircraft_data() -> dict:
             lon = _to_float(ac.get('lon'))
             gs = _to_float(ac.get('gs'))
             track = _to_float(ac.get('track'))
-            if track == 360.0: track = 0.0
+            if track == 360.0:
+                track = 0.0
 
             # --- ALTITUDE FALLBACK LOGIC ---
             alt_geom_val = _to_float(ac.get('alt_geom'))
@@ -112,22 +108,17 @@ def read_aircraft_data() -> dict:
 
 
             # Combined validation check
-            is_valid = True
-            # Use _in_range helper which handles None safely
-            if not _in_range(lat, -90, 90): is_valid = False
-            if not _in_range(lon, -180, 180): is_valid = False
-            if not _in_range(track, 0, 359.999): is_valid = False # Allow 0-359.999
-            if alt is None: # Check if *both* altitudes were missing/invalid
-                 is_valid = False
-                 skipped_alt += 1 # Count specifically why it was skipped
-            elif not _in_range(alt, -2000, 80000): # Check reasonable range for the chosen altitude
-                 is_valid = False
-            if not _in_range(gs, 0, 1200): is_valid = False
-
-            if not is_valid:
-                # Add optional verbose logging here if needed
-                # logger.debug(f"DEBUG: Skipping {icao} - lat:{lat}, lon:{lon}, alt:{alt}, track:{track}, gs:{gs}")
-                skipped_invalid += 1
+            if not _in_range(lat, -90, 90):
+                continue
+            if not _in_range(lon, -180, 180):
+                continue
+            if not _in_range(track, 0, 359.999):
+                continue
+            if alt is None:
+                continue
+            if not _in_range(alt, -2000, 80000):
+                continue
+            if not _in_range(gs, 0, 1200):
                 continue
 
             # Calculate the absolute sample time based on the file's timestamp and the age
@@ -144,13 +135,6 @@ def read_aircraft_data() -> dict:
                 'flight': flight,
                 'age_s': age,          # Age relative to file_time
             }
-            processed_count += 1
-
-        # Optional: Add summary print here if needed
-        # if skipped_stale or skipped_invalid or skipped_alt:
-        #    logger.debug(f"DEBUG: Read aircraft: {processed_count} processed, "
-        #          f"{skipped_stale} stale, {skipped_invalid} invalid (pos/range), "
-        #          f"{skipped_alt} missing alt.")
 
         return aircraft_dict
 

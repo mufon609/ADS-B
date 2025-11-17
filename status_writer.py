@@ -3,12 +3,14 @@
 Module for atomically writing the application status to a JSON file.
 """
 import json
+import logging
 import os
+import tempfile
 import threading
 import time
-import tempfile
+
 import numpy as np
-import logging
+
 from config_loader import CONFIG, LOG_DIR
 
 logger = logging.getLogger(__name__)
@@ -23,15 +25,10 @@ def convert_numpy_types(obj):
     elif isinstance(obj, list):
         return [convert_numpy_types(item) for item in obj]
     # Handle various NumPy integer types using the abstract base class
-    elif isinstance(obj, np.integer): # More general check for all NumPy integers
-        return int(obj)
-    # Handle various NumPy float types using the abstract base class
-    # Replace np.float_ with np.floating (or specific types like np.float64 if preferred)
-    elif isinstance(obj, np.floating): # More general check for all NumPy floats
-        # Check for NaN/Inf which are not valid JSON
-        if np.isnan(obj): return None # Represent NaN as null
-        if np.isinf(obj): return str(obj) # Represent Inf as "Infinity" or "-Infinity"
-        return float(obj)
+    elif isinstance(obj, (np.integer, np.floating)):
+        if isinstance(obj, np.floating) and (np.isnan(obj) or np.isinf(obj)):
+            return None if np.isnan(obj) else str(obj)
+        return int(obj) if isinstance(obj, np.integer) else float(obj)
     # Handle complex numbers (store as dict)
     elif isinstance(obj, np.complexfloating): # More general check for complex
         return {'real': obj.real, 'imag': obj.imag}
@@ -67,8 +64,8 @@ def write_status(status: dict):
             # Create a copy for writing (conversion already happened)
             status_to_write = _current_status_cache.copy()
         except Exception as e:
-             logger.error(f"Error updating status cache: {e}")
-             status_to_write = _current_status_cache.copy() if _current_status_cache else None
+            logger.error(f"Error updating status cache: {e}")
+            status_to_write = _current_status_cache.copy() if _current_status_cache else None
 
     if status_to_write: # Ensure we have data to write
         path = os.path.join(LOG_DIR, 'status.json')
@@ -86,11 +83,12 @@ def write_status(status: dict):
                 os.replace(tmp_path, path) # Atomic rename
             finally:
                 try:
-                    if os.path.exists(tmp_path): os.remove(tmp_path)
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
                 except OSError: pass # Ignore cleanup errors
         except Exception as e:
-             # Print the specific error related to writing
-             logger.error(f"Error writing status file '{path}': {e}")
+            # Print the specific error related to writing
+            logger.error(f"Error writing status file '{path}': {e}")
              # Optionally print the problematic dictionary for debugging
              # import sys
              # logger.error(f"Problematic status dict: {status_to_write}", file=sys.stderr)

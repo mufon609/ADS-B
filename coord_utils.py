@@ -2,13 +2,15 @@
 """
 Module for coordinate transformations and astronomical calculations.
 """
+import logging
 import math
 from typing import Optional
-import logging
-from astropy.coordinates import EarthLocation, SkyCoord, AltAz, get_sun
+
 from astropy import units as u
+from astropy.coordinates import AltAz, EarthLocation, SkyCoord, get_sun
 from astropy.time import Time
 from geopy.distance import geodesic
+
 from config_loader import CONFIG
 
 logger = logging.getLogger(__name__)
@@ -52,7 +54,8 @@ def slew_time_needed(current: tuple, target: tuple, max_slew_rate_deg_s: float, 
 
 def angular_speed_deg_s(start_azel: tuple, end_azel: tuple, time_delta_s: float, frame: AltAz) -> float:
     """Calculates the angular speed between two points in degrees per second."""
-    if time_delta_s <= 0: return float('inf')
+    if time_delta_s <= 0:
+        return float('inf')
     angular_distance = angular_sep_deg(start_azel, end_azel, frame)
     return angular_distance / time_delta_s
 

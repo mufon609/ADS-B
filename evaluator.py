@@ -2,13 +2,14 @@
 """
 Module for evaluating the accuracy of dead reckoning predictions against actual flight data.
 """
-import json
-import statistics
 import bisect
-import os
+import json
 import logging
+import os
+import statistics
 from collections import defaultdict
 from typing import List
+
 from config_loader import CONFIG, LOG_DIR
 from coord_utils import distance_km
 from logger_config import setup_logging
@@ -17,13 +18,13 @@ logger = logging.getLogger(__name__)
 
 def find_closest_actual(timestamps: List[float], target_time: float) -> int:
     """Finds the index of the closest timestamp in a sorted list using bisection."""
-    if not timestamps:
-        return -1
+        if not timestamps:
+            return -1
     pos = bisect.bisect_left(timestamps, target_time)
-    if pos == 0:
-        return 0
-    if pos == len(timestamps):
-        return len(timestamps) - 1
+        if pos == 0:
+            return 0
+        if pos == len(timestamps):
+            return len(timestamps) - 1
     before, after = timestamps[pos - 1], timestamps[pos]
     return pos if abs(after - target_time) < abs(before - target_time) else pos - 1
 

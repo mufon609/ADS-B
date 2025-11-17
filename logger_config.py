@@ -3,10 +3,21 @@
 Centralized logging configuration for the application.
 """
 import logging
+import os
 import sys
 from logging.handlers import RotatingFileHandler
-import os
+
 from config_loader import CONFIG, LOG_DIR
+
+
+class FlushingStreamHandler(logging.StreamHandler):
+    """A stream handler that flushes after every emit."""
+
+    def emit(self, record):
+        """Emits a record and flushes the stream."""
+        super().emit(record)
+        self.flush()
+
 
 def setup_logging():
     """
@@ -35,7 +46,7 @@ def setup_logging():
         logger.handlers.clear()
 
     # Console Handler
-    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler = FlushingStreamHandler(sys.stdout)
     console_handler.setLevel(log_level)
     console_handler.setFormatter(console_formatter)
     logger.addHandler(console_handler)
@@ -56,6 +67,7 @@ def setup_logging():
         if issubclass(exc_type, KeyboardInterrupt):
             sys.__excepthook__(exc_type, exc_value, exc_traceback)
             return
-        logger.critical("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
+        logger.critical("Uncaught exception", exc_info=(
+            exc_type, exc_value, exc_traceback))
 
     sys.excepthook = handle_exception

@@ -1,24 +1,27 @@
-#storage.py
+# storage.py
 """
 Module for logging data to JSON files with atomic writes and log rotation.
 """
 import json
-import os
-import time
-import threading
 import logging
-from typing import List, Dict, Any, Iterable
+import os
+import threading
+import time
 from collections import defaultdict
+from typing import Any, Dict, Iterable, List
+
 from config_loader import CONFIG, LOG_DIR
 
 logger = logging.getLogger(__name__)
 
 _file_locks = defaultdict(threading.Lock)
 
+
 def ensure_log_dir():
     """Creates log directory and images subdir if they don't exist, using absolute paths."""
     os.makedirs(LOG_DIR, exist_ok=True)
     os.makedirs(os.path.join(LOG_DIR, 'images'), exist_ok=True)
+
 
 def _fsync_dir(dir_path: str):
     """Fsync the containing directory to make a rename operation durable on disk."""
@@ -34,8 +37,8 @@ def _fsync_dir(dir_path: str):
             os.close(dir_fd)
     except Exception as e:
         # Log the error but don't crash if fsync fails (e.g., permissions, OS support)
-        # logger.warning(f"Warning: Could not fsync directory '{dir_path}': {e}")
-        pass # Allow operation to continue even if directory sync fails
+        pass  # Allow operation to continue even if directory sync fails
+
 
 def _read_log_object(file_path: str) -> Dict[str, Any]:
     """Reads a JSON log file, safely handling errors and always returning a valid structure."""
@@ -53,9 +56,7 @@ def _read_log_object(file_path: str) -> Dict[str, Any]:
                 return _blank()
             obj = json.loads(content)
     except (OSError, json.JSONDecodeError, UnicodeDecodeError) as e:
-         # Log error if reading/parsing fails
-         # logger.warning(f"Warning: Error reading log file {file_path}: {e}. Starting fresh.")
-         return _blank()
+        return _blank()
 
     # Basic structure validation and migration for old list-based format
     if isinstance(obj, list):
@@ -66,8 +67,9 @@ def _read_log_object(file_path: str) -> Dict[str, Any]:
     if 'metadata' not in obj or not isinstance(obj.get('metadata'), dict):
         obj['metadata'] = {"epoch": "unix_utc", "version": "1.0"}
     if 'data' not in obj or not isinstance(obj.get('data'), list):
-        obj['data'] = [] # Ensure 'data' is always a list
+        obj['data'] = []  # Ensure 'data' is always a list
     return obj
+
 
 def _rotate(file_path: str) -> str:
     """Rotates the log file by renaming it with a timestamp and PID."""
@@ -75,20 +77,21 @@ def _rotate(file_path: str) -> str:
     backup_path = f"{file_path}.{int(time.time())}.{os.getpid()}.bak"
     try:
         os.rename(file_path, backup_path)
-        # logger.info(f"Log file {os.path.basename(file_path)} rotated to {os.path.basename(backup_path)}")
-        _fsync_dir(os.path.dirname(file_path)) # Sync directory after rename
+        _fsync_dir(os.path.dirname(file_path))  # Sync directory after rename
     except OSError as e:
         logger.error(f"Error rotating log file {file_path}: {e}")
         # Return original path if rotation fails? Or backup path even if rename failed?
         # Returning backup_path for consistency, though it might not exist.
     return backup_path
 
+
 def _should_rotate(file_path: str, new_records: Iterable[Dict[str, Any]], threshold_bytes: int) -> bool:
     """Determines if a log file should be rotated before adding new content."""
     try:
-        current_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
+        current_size = os.path.getsize(
+            file_path) if os.path.exists(file_path) else 0
     except OSError:
-        current_size = 0 # Assume 0 if cannot get size
+        current_size = 0  # Assume 0 if cannot get size
 
     # Rotate if current size already exceeds threshold
     if current_size >= threshold_bytes:
@@ -101,32 +104,36 @@ def _should_rotate(file_path: str, new_records: Iterable[Dict[str, Any]], thresh
         # Convert iterable to list for json.dumps
         records_list = list(new_records)
         # Add estimate for list brackets and commas
-        added_bytes_estimate = len(json.dumps(records_list, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))
+        added_bytes_estimate = len(json.dumps(
+            records_list, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))
     except Exception:
         # Fallback to a reasonable estimate if serialization fails
-        added_bytes_estimate = 2048 * len(records_list) if isinstance(records_list, list) else 2048
+        added_bytes_estimate = 2048 * \
+            len(records_list) if isinstance(records_list, list) else 2048
 
     # Check if adding estimated size exceeds threshold
     return (current_size + added_bytes_estimate) > threshold_bytes
+
 
 def append_to_json(datas: List[Dict[str, Any]], file_path: str):
     """Appends records to a JSON log file atomically, with pre-emptive rotation."""
     # Basic input validation
     if not isinstance(datas, list) or not datas or not all(isinstance(x, dict) for x in datas):
-        # logger.warning(f"Warning: Invalid input to append_to_json for {file_path}. Input must be a non-empty list of dicts.")
         return
 
     # Ensure target directory exists
     dir_path = os.path.dirname(file_path)
     try:
-         os.makedirs(dir_path, exist_ok=True)
+        os.makedirs(dir_path, exist_ok=True)
     except OSError as e:
-         logger.error(f"Error: Could not create directory {dir_path} for log file {file_path}: {e}")
-         return # Cannot proceed if directory creation fails
+        logger.error(
+            f"Error: Could not create directory {dir_path} for log file {file_path}: {e}")
+        return  # Cannot proceed if directory creation fails
 
     # Get rotation threshold from config
     threshold_mb = int(CONFIG.get('logging', {}).get('log_max_size_mb', 25))
-    threshold_bytes = max(1024 * 1024, threshold_mb * 1024 * 1024) # Ensure at least 1MB threshold
+    # Ensure at least 1MB threshold
+    threshold_bytes = max(1024 * 1024, threshold_mb * 1024 * 1024)
 
     with _file_locks[file_path]:
         # Check if rotation is needed before reading the log
@@ -144,13 +151,15 @@ def append_to_json(datas: List[Dict[str, Any]], file_path: str):
         # Prepare for atomic write using a temporary file in the same directory
         base_name = os.path.basename(file_path)
         # Use simpler temp file naming convention if needed
-        tmp_path = os.path.join(dir_path, f".{base_name}.{os.getpid()}.{int(time.time_ns())}.tmp")
+        tmp_path = os.path.join(
+            dir_path, f".{base_name}.{os.getpid()}.{int(time.time_ns())}.tmp")
 
         try:
             # Write the updated object to the temporary file
             with open(tmp_path, 'w', encoding='utf-8') as f:
                 # Use compact separators for potentially smaller file size? Indent=2 is more readable.
-                json.dump(log_object, f, indent=2, ensure_ascii=False, allow_nan=False)
+                json.dump(log_object, f, indent=2,
+                          ensure_ascii=False, allow_nan=False)
                 # Ensure data is written to OS buffer
                 f.flush()
                 # Ensure data is written physically to disk
@@ -161,8 +170,8 @@ def append_to_json(datas: List[Dict[str, Any]], file_path: str):
             # Sync the directory to make the rename persistent
             _fsync_dir(dir_path)
         except Exception as e:
-             # Log error if writing or replacing fails
-             logger.error(f"Error writing log file {file_path}: {e}")
+            # Log error if writing or replacing fails
+            logger.error(f"Error writing log file {file_path}: {e}")
         finally:
             # Clean up the temporary file if it still exists (e.g., after an error)
             if os.path.exists(tmp_path):
