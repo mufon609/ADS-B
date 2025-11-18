@@ -1,43 +1,59 @@
-<!doctype html>
-<html>
+<!DOCTYPE html>
+<html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <title>ADS-B Tracker Dashboard</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <!-- Use jsDelivr; unpkg sometimes serves text/plain -->
-  <link href="https://cdn.jsdelivr.net/npm/missing.css@1.1.3/dist/missing.min.css" rel="stylesheet">
-  <style>
-    body { background: #222; color: #eee; }
-    main { max-width: 1600px; }
-    .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit,minmax(320px,1fr)); }
-    .imgbox { background:#111; padding:0.5rem; border-radius:8px; min-height: 180px; }
-    .imgbox img { width:100%; height:auto; display:block; border-radius:4px; }
-    .muted { opacity: 0.7; }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size: 0.9em; }
-    dt { font-weight: bold; color: #aaa; float: left; width: 140px; clear: left; }
-    dd { margin-left: 150px; padding-bottom: 0.2em;}
-    dl { overflow: hidden; }
-    button { padding: 0.25em 0.5em; margin: 0; }
-    .controls { display: flex; gap: 0.5rem; margin-top: 1rem; }
-    button.danger { background-color: #a42; border-color: #831; color: white; }
-    button:disabled { background-color: #444; border-color: #333; }
-    .status-idle { color: #8f8; }
-    .status-tracking, .status-slewing, .status-focusing { color: #8df; }
-    .status-acquiring { color: #fd8; }
-    .tracking-row { background-color: #334; font-weight: bold; }
+    <meta charset="UTF-8" />
+    <title>ADS-B Tracker Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+        body { font-family: sans-serif; margin: 0; padding: 20px; background-color: #1e1e1e; color: #d4d4d4; }
+        .container { max-width: 1600px; margin: auto; }
+        h1, h2 { color: #569cd6; border-bottom: 1px solid #333; padding-bottom: 5px; }
+        .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+        .panel { background-color: #252526; padding: 15px; border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.5); }
+        article { padding: 15px; border-radius: 4px; background-color: #252526; }
+        
+        .imgbox { background:#111; padding:0.5rem; border-radius:8px; min-height: 180px; text-align: center; }
+        .imgbox img { width:100%; height:auto; display:block; border-radius:4px; max-height: 250px; object-fit: contain; margin: auto; }
+        
+        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size: 0.9em; }
+        dt { font-weight: bold; color: #aaa; float: left; width: 140px; clear: left; }
+        dd { margin-left: 150px; padding-bottom: 0.2em;}
+        dl { overflow: hidden; }
+        
+        /* Status Classes */
+        .status-idle { color: #8f8; }
+        .status-tracking, .status-slewing, .status-focusing, .status-acquiring { color: #8df; }
+        .status-error { color: #f44747; }
+        .tracking-row { background-color: #334; font-weight: bold; }
+        .connection-warning { color: #f44747; background-color: #3f1e1e; padding: 5px; border-radius: 3px; display: none; margin-bottom: 1rem; } 
 
-    /* Multi-variant stack panel */
-    .stack-grid { display:grid; gap:1rem; grid-template-columns: repeat(auto-fit, minmax(260px,1fr)); }
-    .stack-card h4 { margin: 0 0 .25rem 0; }
-    .stack-links a { margin-right: .75rem; }
-    .pill { display:inline-block; padding:.15rem .5rem; border-radius:999px; background:#333; color:#ddd; font-size:.8em; }
-    .sep { opacity:.5; margin:0 .25rem; }
-  </style>
+        /* Commands */
+        .controls { display: flex; gap: 0.5rem; margin-top: 1rem; }
+        .controls button { padding: 0.25em 0.5em; margin: 0; }
+        button.danger { background-color: #a42; border-color: #831; color: white; }
+        button:disabled { background-color: #333; border-color: #333; cursor: not-allowed; }
+        
+        /* Stack Layouts */
+        .stack-grid { display:grid; gap:1rem; grid-template-columns: repeat(auto-fit, minmax(260px,1fr)); }
+        .stack-links a { margin-right: .75rem; color: #569cd6; }
+        .pill { display:inline-block; padding:.15rem .5rem; border-radius:999px; background:#333; color:#ddd; font-size:.8em; }
+        .sep { opacity:.5; margin:0 .25rem; }
+        
+        /* Lazy Loading (Performance) */
+        .lazy-gallery-image { width: 100%; height: 100%; object-fit: contain; display: block; opacity: 0.2; transition: opacity 0.5s; }
+        .lazy-gallery-image:not([data-src]) { opacity: 0; } 
+        #stack-gallery { display: flex; flex-wrap: wrap; gap: 15px; }
+
+        /* Table Track Form */
+        .table-track-form { margin: 0; display: inline-block; }
+    </style>
 </head>
 <body>
 <header><h1>ADS-B Tracker Dashboard</h1></header>
 
-<main>
+<main class="container">
+<p id="connection-status-banner" class="connection-warning">CONNECTION LOST. Attempting to reconnect...</p>
+
 <section class="grid">
   <article>
     <h3>System Status</h3>
@@ -49,8 +65,8 @@
       <dt>Last Update</dt><dd id="updatedAt">—</dd>
     </dl>
     <div class="controls">
-        <form action="/command/abort" method="post"><button type="submit" id="abortButton" class="danger" disabled>Abort Track</button></form>
-        <form action="/command/park" method="post"><button type="submit">Park Mount</button></form>
+        <form action="/command/abort" method="post" data-command="abort"><button type="submit" id="abortButton" class="danger" disabled>Abort Track</button></form>
+        <form action="/command/park" method="post" data-command="park"><button type="submit">Park Mount</button></form>
     </div>
   </article>
 
@@ -63,6 +79,9 @@
       <dt>Speed</dt><dd id="targetSpeed">—</dd>
       <dt>Track</dt><dd id="targetTrack">—</dd>
     </dl>
+    <div class="mono muted" style="margin-top: 0.5rem;">
+        Frames: <span id="sequenceCount">—</span> / Exp: <span id="sequenceExp">—</span>s
+    </div>
   </article>
 
   <article>
@@ -76,24 +95,23 @@
         <dt>Live Offset</dt><dd id="camOffset">—</dd>
         <dt>Focuser Pos</dt><dd id="focuserPos">—</dd>
         <dt>Focuser Temp</dt><dd id="focuserTemp">—</dd>
-        <dt>Mount Pier Side</dt><dd id="pierSide">—</dd>
+        <dt>Pier Side</dt><dd id="pierSide">—</dd>
     </dl>
   </article>
 
   <article>
     <h3>Latest Guide Image</h3>
-    <div class="imgbox"><img id="guideImg" alt="Guide preview" style="display:none;"/></div>
+    <div class="imgbox">
+        <img id="guideImg" alt="Guide preview" style="display:none;"/>
+        <span id="guide-placeholder">Waiting for image...</span>
+    </div>
     <div id="guideInfo" class="mono muted">—</div>
     <div class="mono">Offset: <span id="offsetXY">—</span></div>
-    <!-- This text was part of the removed panel, moving it here -->
-    <div class="mono muted" style="margin-top: 0.5rem;">
-        Frames: <span id="sequenceCount">—</span> / Exp: <span id="sequenceExp">—</span>s
-    </div>
+    
   </article>
 
 </section>
 
-<!-- Latest multi-variant stacks -->
 <section>
   <h2>Latest Stacks <span id="stackBadge" class="pill" style="display:none;"></span></h2>
   <div id="stackMeta" class="mono muted">No stacked sequences yet.</div>
@@ -147,17 +165,42 @@
     </table>
   </div>
 </section>
+
+<section>
+    <h3>Manual Target Control</h3>
+    <form class="controls" action="/command/track" method="post" data-command="track">
+        <input type="text" name="icao" id="icao-input" maxlength="6" placeholder="ICAO (e.g., A8C3B1)" required>
+        <button type="submit">TRACK ICAO</button>
+    </form>
+</section>
+
 </main>
 
 <script>
 const q = sel => document.querySelector(sel);
-const has = v => v !== undefined && v !== null;
+const WS_URL = 'ws://' + window.location.host + '/ws/status';
+const LATEST_STACK_API_URL = '/api/latest_stack';
+const RECONNECT_INTERVAL_MS = 3000;
+
+let websocket;
+let reconnectTimeout;
+let commandInFlight = false; 
+
+// Global state for link persistence (ensures images don't disappear)
+let lastStackSeqId = null;
+let lastLinkUrls   = {
+  mean:   { png:null, fits:null },
+  robust: { png:null, fits:null },
+  anomaly:{ png:null, fits:null }
+};
+
 
 /* === helpers === */
+function has(v) { return v !== undefined && v !== null; }
 function fmt(val, dec = 1) {
   if (!has(val)) return '—';
   const num = Number(val);
-  if (Number.isNaN(num)) return '—';
+  if (Number.isNaN(num) || !Number.isFinite(num)) return '—';
   return num.toFixed(dec);
 }
 
@@ -166,6 +209,7 @@ function createButtonForm(icao) {
   form.action = '/command/track';
   form.method = 'post';
   form.style.margin = '0';
+  form.className = 'table-track-form'; // Add class for event delegation
 
   const input = document.createElement('input');
   input.type = 'hidden';
@@ -176,14 +220,15 @@ function createButtonForm(icao) {
   const btn = document.createElement('button');
   btn.type = 'submit';
   btn.textContent = 'Track';
+  btn.disabled = commandInFlight;
   form.appendChild(btn);
 
   return form;
 }
 
-/* ------------------- Existing dashboard updater ------------------- */
+
 function updateDashboard(s) {
-    const isTracking = s.mode && s.mode !== 'idle' && s.mode !== 'initializing';
+    const isTracking = s.mode && s.mode !== 'idle' && s.mode !== 'initializing' && s.mode !== 'error';
     q('#abortButton').disabled = !isTracking;
 
     // Status Panel
@@ -203,6 +248,7 @@ function updateDashboard(s) {
         modeText = 'Idle - Monitoring';
     }
     statusEl.textContent = modeText;
+    
     q('#targetCoords').textContent = has(s.target_az_el) ? `az ${fmt(s.target_az_el[0])}, el ${fmt(s.target_az_el[1])}` : '—';
     q('#mountCoords').textContent = has(s.mount_az_el) ? `az ${fmt(s.mount_az_el[0])}, el ${fmt(s.mount_az_el[1])}` : '—';
     q('#observerLocation').textContent = has(s.observer_loc) ? `Lat ${fmt(s.observer_loc.lat, 2)}, Lon ${fmt(s.observer_loc.lon, 2)}` : '—';
@@ -215,7 +261,9 @@ function updateDashboard(s) {
     q('#targetAlt').textContent = has(details.alt) ? `${fmt(details.alt, 0)} ft` : '—';
     q('#targetSpeed').textContent = has(details.gs) ? `${fmt(details.gs, 1)} kts` : '—';
     q('#targetTrack').textContent = has(details.track) ? `${fmt(details.track, 1)}°` : '—';
-    
+    q('#sequenceCount').textContent = s.sequence_count || '—';
+    q('#sequenceExp').textContent = has(s.sequence_exposure_s) ? fmt(s.sequence_exposure_s, 3) : '—';
+
     // Camera & Hardware Vitals Panel
     const settings = s.camera_settings || {};
     q('#camSetpoint').textContent = settings.cooling ? `${fmt(settings.cooling.setpoint_c, 1)} °C` : '—';
@@ -228,12 +276,34 @@ function updateDashboard(s) {
     q('#focuserTemp').textContent = has(s.focuser_temp) ? `${fmt(s.focuser_temp, 1)} °C` : '—';
     q('#pierSide').textContent = s.mount_pier_side || '—';
     
-    // Live Airspace Table
+    // Guide Image and Info
+    const guideEl = q('#guideImg');
+    const guidePlaceholder = q('#guide-placeholder');
+    const mtime = s.last_guide_mtime; 
+    const guideUrl = s.last_guide_png;
+
+    if (guideUrl && mtime) {
+        const cacheBusterUrl = guideUrl + '?t=' + mtime; 
+        if (guideEl.src !== cacheBusterUrl) {
+            guideEl.onload = () => { guideEl.style.display = 'block'; guidePlaceholder.style.display = 'none'; };
+            guideEl.onerror = () => { guideEl.style.display = 'none'; guidePlaceholder.style.display = 'block'; };
+            guideEl.src = cacheBusterUrl;
+        }
+    } else {
+        guideEl.style.display = 'none';
+        guidePlaceholder.style.display = 'block';
+    }
+    
+    q('#guideInfo').textContent = s.last_guide_file || '—';
+    q('#offsetXY').textContent = has(s.guide_offset_px) ? `dx=${fmt(s.guide_offset_px.dx)}, dy=${fmt(s.guide_offset_px.dy)} px` : '—';
+
+    // Update Live Airspace Table
     const allAircraft = s.all_aircraft || [];
     q('#allAircraftCount').textContent = allAircraft.length;
     const tbody = q('#allAircraftTableBody');
     tbody.innerHTML = '';
     allAircraft.sort((a, b) => (a.dist_nm ?? Infinity) - (b.dist_nm ?? Infinity));
+    
     allAircraft.forEach(ac => {
         const tr = document.createElement('tr');
         if (ac.icao === s.icao) tr.classList.add('tracking-row');
@@ -255,65 +325,20 @@ function updateDashboard(s) {
         });
 
         const actionTd = document.createElement('td');
-        actionTd.appendChild(createButtonForm(ac.icao));
+        const form = createButtonForm(ac.icao);
+        form.querySelector('button').disabled = commandInFlight; // Disable if command is running
+        actionTd.appendChild(form);
         tr.appendChild(actionTd);
         
         tbody.appendChild(tr);
     });
-
-    // Image Panels (guide)
-    const guideEl = q('#guideImg');
-    if (s.last_guide_png) {
-        guideEl.onload = () => { guideEl.style.display = 'block'; };
-        guideEl.onerror = () => { guideEl.style.display = 'none'; };
-        guideEl.src = s.last_guide_png + '?t=' + Date.now();
-    }
-    q('#guideInfo').textContent = s.last_guide_file || '—';
-    
-
-    q('#sequenceCount').textContent = s.sequence_count || '—';
-    q('#sequenceExp').textContent = has(s.sequence_exposure_s) ? fmt(s.sequence_exposure_s, 3) : '—';
-    
-    q('#offsetXY').textContent = has(s.guide_offset_px) ? `dx=${fmt(s.guide_offset_px.dx)}, dy=${fmt(s.guide_offset_px.dy)} px` : '—';
 }
 
-let lastStackSeqId = null;
-let lastImgUrls    = { mean:null, robust:null, anomaly:null };
-let lastLinkUrls   = {
-  mean:   { png:null, fits:null },
-  robust: { png:null, fits:null },
-  anomaly:{ png:null, fits:null }
-};
 
-function _setImgOnce(el, url) {
-  if (!el || !url) return;
-  if (el.dataset.urlBase === url) return;              // don't reload if unchanged
-  el.dataset.urlBase = url;
-  el.onload = () => { el.style.display = 'block'; };
-  el.onerror = () => { /* keep last frame visible; do not hide to avoid flicker */ };
-  el.src = url + (url.includes('?') ? '&' : '?') + 't=' + Date.now();
-}
-
-function _setLinkStable(el, newUrl, variant, kind) {
-  if (!el) return;
-  const prev = lastLinkUrls[variant][kind];
-  if (newUrl) {
-    el.href = newUrl;
-    el.style.display = 'inline';
-    lastLinkUrls[variant][kind] = newUrl;
-  } else if (prev) {
-    // Keep previous valid link visible to avoid flicker
-    el.href = prev;
-    el.style.display = 'inline';
-  } else {
-    // No link ever known for this slot -> keep hidden
-    el.style.display = 'none';
-    el.removeAttribute('href');
-  }
-}
-
+/**
+ * Renders the latest stack payload, ensuring images persist across pending stacks.
+ */
 function renderLatestStackPayload(p) {
-  // If payload is empty (or we got a transient 404 earlier), DO NOTHING.
   if (!p || !p.products) return;
 
   const when = p.timestamp ? new Date(p.timestamp*1000).toLocaleString() : '—';
@@ -325,17 +350,24 @@ function renderLatestStackPayload(p) {
   const mean    = p.products.mean    || {};
   const robust  = p.products.robust  || {};
   const anom    = p.products.anomaly || {};
+  
+  // Find the URL currently being displayed on the screen. This is the fallback.
+  // We check against 'none' because that's what the image will be if it fails loading/is hidden.
+  const currentMeanUrl = q('#stackMeanImg').src.split('?')[0];
+  const currentRobustUrl = q('#stackRobustImg').src.split('?')[0];
+  const currentAnomUrl = q('#stackAnomImg').src.split('?')[0];
 
-  const meanUrl   = mean.png;
-  const robustUrl = robust.png;
-  const anomUrl   = anom.png;
+  // CORE FIX: Use new URL (if present) OR the currently displayed URL as the final source.
+  const finalMeanUrl = mean.png || (currentMeanUrl.endsWith('none') ? null : currentMeanUrl);
+  const finalRobustUrl = robust.png || (currentRobustUrl.endsWith('none') ? null : currentRobustUrl);
+  const finalAnomUrl = anom.png || (currentAnomUrl.endsWith('none') ? null : currentAnomUrl);
 
-  // Images: only change when sequence changed OR URL changed
-  if (p.sequence_id !== lastStackSeqId || meanUrl !== lastImgUrls.mean)   _setImgOnce(q('#stackMeanImg'), meanUrl);
-  if (p.sequence_id !== lastStackSeqId || robustUrl !== lastImgUrls.robust) _setImgOnce(q('#stackRobustImg'), robustUrl);
-  if (p.sequence_id !== lastStackSeqId || anomUrl !== lastImgUrls.anomaly)  _setImgOnce(q('#stackAnomImg'), anomUrl);
+  // 1. Update Images (only called if final URL is non-null)
+  if (finalMeanUrl)   _setImgOnce(q('#stackMeanImg'), finalMeanUrl);
+  if (finalRobustUrl) _setImgOnce(q('#stackRobustImg'), finalRobustUrl);
+  if (finalAnomUrl)   _setImgOnce(q('#stackAnomImg'), finalAnomUrl);
 
-  // Links: keep last known non-empty URLs if new payload omits them
+  // 2. Update Links (uses lastLinkUrls cache)
   _setLinkStable(q('#meanPngLink'),   mean.png,   'mean',   'png');
   _setLinkStable(q('#meanFitsLink'),  mean.fits,  'mean',   'fits');
   _setLinkStable(q('#robustPngLink'), robust.png, 'robust', 'png');
@@ -344,8 +376,50 @@ function renderLatestStackPayload(p) {
   _setLinkStable(q('#anomFitsLink'),  anom.fits,  'anomaly','fits');
 
   lastStackSeqId = p.sequence_id || lastStackSeqId;
-  lastImgUrls = { mean: meanUrl || lastImgUrls.mean, robust: robustUrl || lastImgUrls.robust, anomaly: anomUrl || lastImgUrls.anomaly };
 }
+
+/**
+ * Updates an image element only if the new URL is different OR if the image needs restoring.
+ * @param {HTMLElement} el The <img> element.
+ * @param {string | null} url The new image URL.
+ */
+function _setImgOnce(el, url) {
+  if (!el || !url) return;
+  
+  // Check against the current source URL base
+  const currentUrlBase = el.src.split('?')[0]; 
+
+  // If the new URL is identical to the currently displayed URL base, do nothing.
+  if (currentUrlBase === url) { 
+      return; 
+  }
+
+  // Load the new image with cache busting
+  el.onload = () => { el.style.display = 'block'; };
+  el.onerror = () => { el.style.display = 'none'; }; // Hide only if load fails
+  el.src = url + (url.includes('?') ? '&' : '?') + 't=' + Date.now();
+}
+
+
+/**
+ * Updates link persistence (avoids link flicker/disappearance if API returns null)
+ */
+function _setLinkStable(el, newUrl, variant, kind) {
+  if (!el) return;
+  const prev = lastLinkUrls[variant][kind];
+  if (newUrl) {
+    el.href = newUrl;
+    el.style.display = 'inline';
+    lastLinkUrls[variant][kind] = newUrl; // Cache the new URL
+  } else if (prev) {
+    el.href = prev;
+    el.style.display = 'inline'; // Keep the old link active
+  } else {
+    el.style.display = 'none';
+    el.removeAttribute('href');
+  }
+}
+
 
 function refreshLatestStack(){
   fetch('/api/latest_stack', {cache:'no-store'})
@@ -354,16 +428,95 @@ function refreshLatestStack(){
     .catch(() => {/* ignore transient errors; keep current images/links */});
 }
 
-/* ------------------- Refresh loop ------------------- */
-function refresh(){
-  fetch('/api/status', {cache:'no-store'}).then(r=>r.json()).then(updateDashboard)
-    .catch(()=>{/* Swallow errors during server restarts */});
-  refreshLatestStack();
+// ====================================================================
+// WebSocket and Command Logic
+// ====================================================================
+
+function resetCommandButtons() {
+    commandInFlight = false;
+    document.querySelectorAll('.controls button, .table-track-form button').forEach(btn => {
+        btn.disabled = false;
+        const command = btn.getAttribute('data-command') || 'track'; 
+        
+        if (command === 'track' && btn.getAttribute('type') === 'submit') btn.textContent = 'Track';
+        else if (command === 'abort') btn.textContent = 'Abort Track';
+        else if (command === 'park') btn.textContent = 'Park Mount';
+    });
 }
 
-refresh();
-setInterval(refresh, 2000);
+function handleCommandForms() {
+    document.querySelectorAll('form').forEach(form => {
+        form.addEventListener('submit', function(e) {
+            
+            // Check for ongoing command regardless of form class
+            if (commandInFlight) {
+                e.preventDefault();
+                return;
+            }
+            
+            const btn = this.querySelector('button');
+            const command = btn.getAttribute('data-command') || (form.action.includes('track') ? 'track' : null);
+            const icaoInput = this.querySelector('input[name="icao"]');
+            
+            // Validation
+            if (command === 'track') {
+                const icao = icaoInput.value.trim().toUpperCase();
+                if (!/^[A-F0-9]{6}$/.test(icao)) {
+                    e.preventDefault();
+                    alert('Invalid ICAO format. Must be 6 hex characters (A-F, 0-9).');
+                    return;
+                }
+                icaoInput.value = icao; 
+            }
+            
+            // Optimistic Update
+            commandInFlight = true;
+            document.querySelectorAll('button').forEach(b => b.disabled = true);
+            if (command) {
+                btn.textContent = 'SENT...';
+            }
+        });
+    });
+}
+
+function connectWebSocket() {
+    clearTimeout(reconnectTimeout);
+    
+    const ws = new WebSocket(WS_URL);
+
+    ws.onopen = () => {
+        q('#connection-status-banner').style.display = 'none';
+    };
+
+    ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        updateDashboard(data);
+        refreshLatestStack();
+
+        // Check if command state has been resolved
+        if (commandInFlight && (data.mode !== 'slewing' && data.mode !== 'acquiring' && data.mode !== 'focusing')) {
+            resetCommandButtons();
+        }
+    };
+
+    ws.onclose = (event) => {
+        q('#connection-status-banner').style.display = 'block';
+        reconnectTimeout = setTimeout(connectWebSocket, RECONNECT_INTERVAL_MS);
+    };
+
+    ws.onerror = (error) => {
+        ws.close();
+    };
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    setInterval(() => {
+        q('#updatedAt').textContent = new Date().toLocaleTimeString();
+    }, 1000);
+    
+    connectWebSocket();
+    handleCommandForms();
+});
 </script>
 </body>
 </html>
-
