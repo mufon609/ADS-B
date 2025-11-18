@@ -27,7 +27,7 @@ def convert_numpy_types(obj):
     # Handle various NumPy integer types using the abstract base class
     elif isinstance(obj, (np.integer, np.floating)):
         if isinstance(obj, np.floating) and (np.isnan(obj) or np.isinf(obj)):
-            return None if np.isnan(obj) else str(obj)
+            return None
         return int(obj) if isinstance(obj, np.integer) else float(obj)
     # Handle complex numbers (store as dict)
     elif isinstance(obj, np.complexfloating): # More general check for complex
@@ -44,6 +44,18 @@ def convert_numpy_types(obj):
     # Return object unchanged if not a NumPy type or container
     return obj
 
+def _deep_merge_dicts(d1, d2):
+    """
+    Recursively merges dictionary d2 into dictionary d1.
+    Modifies d1 in place.
+    """
+    for k, v in d2.items():
+        if k in d1 and isinstance(d1[k], dict) and isinstance(v, dict):
+            _deep_merge_dicts(d1[k], v)
+        else:
+            d1[k] = v
+    return d1
+
 def write_status(status: dict):
     """
     Updates the in-memory status cache and atomically writes the full status
@@ -51,21 +63,19 @@ def write_status(status: dict):
     """
     global _current_status_cache # Explicitly modify global cache
 
-    status_to_write = None
     with _status_lock:
         try:
             # Deep update to handle nested dictionaries safely
             # Convert input status dict numpy types *before* merging
             safe_status_update = convert_numpy_types(status)
-            # Merge update into cache
-            for key, value in safe_status_update.items():
-                 _current_status_cache[key] = value # Simple update replaces/adds keys
+            # Merge update into cache using deep merge
+            _deep_merge_dicts(_current_status_cache, safe_status_update)
             _current_status_cache['updated_at'] = time.time()
-            # Create a copy for writing (conversion already happened)
-            status_to_write = _current_status_cache.copy()
         except Exception as e:
             logger.error(f"Error updating status cache: {e}")
-            status_to_write = _current_status_cache.copy() if _current_status_cache else None
+        finally:
+            # Always create a copy for writing, even if an error occurred during update
+            status_to_write = _current_status_cache.copy()
 
     if status_to_write: # Ensure we have data to write
         path = os.path.join(LOG_DIR, 'status.json')

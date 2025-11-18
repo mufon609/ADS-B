@@ -76,3 +76,5 @@ Use these simple commands to trigger common refactoring tasks. Respond precisely
 | `doc` | Suggest improvements to existing documentation or addition of missing docstrings for public APIs. |
 | `status` | Summarize overall project health, listing the top 3 high-priority, visible issues. |
 | `linter` | Suggest changes to align the codebase with a specific linter configuration (e.g., flake8 or mypy rules). |
+| `plan`       | Generate a step-by-step implementation plan for a feature or fix without writing code. |
+| `implement`  | Execute a pre-existing plan step-by-step, updating progress and seeking approval for changes. |

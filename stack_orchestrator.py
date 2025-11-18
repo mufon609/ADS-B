@@ -65,8 +65,8 @@ def _rel_to_logs_url(path: str) -> Optional[str]:
         rel = os.path.relpath(abs_path, abs_root).replace(os.sep, "/")
         return f"/logs/{rel}"
     except Exception:
+        logger.exception("Error mapping absolute path to /logs/ URL")
         return None
-
 
 def schedule_stack_and_publish(sequence_id: str, image_paths: List[str], capture_meta: Dict) -> None:
     """
@@ -154,10 +154,9 @@ def _run_stacking_pipeline(sequence_id: str, image_paths: List[str], capture_met
         manifest_path = os.path.join(out_dir, "manifest.json")
         with open(manifest_path, "w") as f:
             json.dump(manifest, f, indent=2)
-    except Exception as e:
-        logger.error(
-            f"  Orchestrator: Unhandled exception in stacking worker: {e}")
-        traceback.print_exc()
+    except Exception:
+        logger.exception(
+            f"  Orchestrator: Unhandled exception in stacking worker for sequence {sequence_id}")
 
 
 def shutdown() -> None:

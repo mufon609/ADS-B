@@ -245,7 +245,16 @@ class IndiController(PyIndi.BaseClient):
         return "CCD1"
 
     def newBLOB(self, bp):
-        """Handles incoming BLOB data from the INDI server."""
+        """
+        INDI callback executed when a new BLOB (Binary Large Object) is received.
+
+        This method is the entry point for incoming image data from the camera.
+        It retrieves the image data, associates it with a pending exposure request,
+        and stores it for later processing.
+
+        Args:
+            bp: The BLOB property object from the PyIndi client.
+        """
         is_expected_blob = (bp.name == self._blob_name) or (
             self._blob_name == "CCD1" and bp.name == "CCD1")
         if not is_expected_blob:
@@ -279,7 +288,14 @@ class IndiController(PyIndi.BaseClient):
 
     def get_hardware_status(self) -> dict:
         """
-        Queries all hardware and returns a dictionary of their status.
+        Queries all connected hardware devices for their current status.
+
+        This method gathers key telemetry from the mount, camera, and focuser,
+        such as position, temperature, and settings. In dry-run mode, it returns
+        a dictionary of simulated values.
+
+        Returns:
+            A dictionary containing the consolidated status of all hardware.
         """
         status = {}
         try:
@@ -385,8 +401,20 @@ class IndiController(PyIndi.BaseClient):
 
     def slew_to_az_el(self, az: float, el: float, progress_cb: Optional[Callable[[float, float, str], None]] = None) -> bool:
         """
-        Commands the mount to slew to a target Az/El.
-        Includes safety checks for sun avoidance and altitude limits.
+        Commands the mount to slew to a target Azimuth/Elevation coordinate.
+
+        This method includes safety checks to prevent slewing too close to the
+        sun or outside of configured altitude limits. It monitors the slew
+        progress and reports completion or failure.
+
+        Args:
+            az: The target azimuth in degrees.
+            el: The target elevation in degrees.
+            progress_cb: An optional callback function to receive progress updates
+                         during the slew. It receives (current_az, current_el, state).
+
+        Returns:
+            True if the slew completes successfully, False otherwise.
         """
         if CONFIG['development']['dry_run']:
             frame = get_altaz_frame(self.observer_loc)
@@ -404,8 +432,8 @@ class IndiController(PyIndi.BaseClient):
                     if progress_cb:
                         try:
                             progress_cb(*self.simulated_az_el, "abort")
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.warning(f"Error in slew progress_cb: {e}")
                     logger.info("[DRY RUN] Slew aborted by shutdown.")
                     return False
                 f = i / steps
@@ -415,16 +443,16 @@ class IndiController(PyIndi.BaseClient):
                 if progress_cb:
                     try:
                         progress_cb(cur_az, cur_el, "slewing")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"Error in slew progress_cb: {e}")
                 time.sleep(0.5)
             self.simulated_az_el = (az % 360.0, el)
             if progress_cb:
                 try:
                     progress_cb(
                         self.simulated_az_el[0], self.simulated_az_el[1], "arrived")
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"Error in slew progress_cb: {e}")
             logger.info(
                 f"[DRY RUN] Slew complete. Mount is now at: ({az:.2f}, {el:.2f})")
             return True
@@ -434,8 +462,8 @@ class IndiController(PyIndi.BaseClient):
             if progress_cb:
                 try:
                     progress_cb(0, 0, "abort")
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"Error in slew progress_cb: {e}")
             return False
 
         az = az % 360.0
@@ -462,8 +490,8 @@ class IndiController(PyIndi.BaseClient):
                 if progress_cb:
                     try:
                         progress_cb(current_az, current_el, "abort")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"Error in slew progress_cb: {e}")
                 return False
         except Exception as e:
             logger.warning(
@@ -473,14 +501,12 @@ class IndiController(PyIndi.BaseClient):
         if alt_limit_prop:  # Altitude limit check
             min_el_w = alt_limit_prop.findWidgetByName("MIN")
             if min_el_w and el < min_el_w.value:
-                logger.warning(
-                    f"SAFETY ABORT: El {el:.2f} < limit {min_el_w.value:.2f} deg.")
                 if progress_cb:
                     try:
                         progress_cb(
                             *self._get_current_az_el_internal(), "abort")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"Error in slew progress_cb: {e}")
                 return False
             max_el_w = alt_limit_prop.findWidgetByName("MAX")
             if max_el_w and el > max_el_w.value:
@@ -490,8 +516,8 @@ class IndiController(PyIndi.BaseClient):
                     try:
                         progress_cb(
                             *self._get_current_az_el_internal(), "abort")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"Error in slew progress_cb: {e}")
                 return False
 
         coord_prop = None
@@ -537,8 +563,13 @@ class IndiController(PyIndi.BaseClient):
                     try:
                         progress_cb(
                             *self._get_current_az_el_internal(), "abort")
-                    except Exception:
+                    except Exception as e:
+                        logger.warning(f"Error in slew progress_cb: {e}")
+                else:
+                    try:
                         progress_cb(0, 0, "abort")
+                    except Exception as e:
+                        logger.warning(f"Error in slew progress_cb: {e}")
                 return False
 
         if not coord_prop:  # Check if send command failed
@@ -576,17 +607,18 @@ class IndiController(PyIndi.BaseClient):
                     if progress_cb:
                         try:
                             progress_cb(cur_az_prog, cur_el_prog, "slewing")
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
+                        except Exception as e:
+                            logger.warning(f"Error in slew progress_cb: {e}")
+                except Exception as e:
+                    logger.warning(f"Error during slew progress update: {e}")
                 if self.shutdown_event and self.shutdown_event.is_set():
                     logger.info("Slew aborted by shutdown.")
                     if progress_cb:
                         try:
                             progress_cb(
                                 *self._get_current_az_el_internal(), "abort")
-                        except Exception:
+                        except Exception as e:
+                            logger.warning(f"Error in slew progress_cb: {e}")
                             progress_cb(0, 0, "abort")
                     return False
                 time.sleep(0.5)
@@ -604,8 +636,8 @@ class IndiController(PyIndi.BaseClient):
                 if progress_cb:
                     try:
                         progress_cb(cur_az_final, cur_el_final, "arrived")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"Error in slew progress_cb: {e}")
                 logger.info(
                     f"Mount final position: ({cur_az_final:.2f}, {cur_el_final:.2f})")
                 return True
@@ -614,15 +646,16 @@ class IndiController(PyIndi.BaseClient):
                 if progress_cb:
                     try:
                         progress_cb(az, el, "arrived")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"Error in slew progress_cb: {e}")
                 return True
         elif final_state == PyIndi.IPS_ALERT:  # ALERT check
             logger.warning("Warning: Slew failed (Alert).")
             if progress_cb:
                 try:
                     progress_cb(*self._get_current_az_el_internal(), "abort")
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"Error in slew progress_cb: {e}")
                     progress_cb(0, 0, "abort")
             return False
         elif final_state == PyIndi.IPS_BUSY:  # TIMEOUT check
@@ -630,7 +663,8 @@ class IndiController(PyIndi.BaseClient):
             if progress_cb:
                 try:
                     progress_cb(*self._get_current_az_el_internal(), "abort")
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"Error in slew progress_cb: {e}")
                     progress_cb(0, 0, "abort")
             return False
         else:  # UNEXPECTED state check
@@ -641,13 +675,26 @@ class IndiController(PyIndi.BaseClient):
             if progress_cb:
                 try:
                     progress_cb(*self._get_current_az_el_internal(), "abort")
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"Error in slew progress_cb: {e}")
                     progress_cb(0, 0, "abort")
             return False
 
     def autofocus(self, alt_ft: float = None) -> bool:
         """
-        Performs an autofocus routine by scanning positions and measuring sharpness.
+        Performs an automated focusing routine.
+
+        The routine scans a range of focuser positions, captures an image at each,
+        and measures the sharpness (e.g., Half-Flux Radius). It then moves the
+        focuser to the position that yielded the sharpest image.
+
+        Args:
+            alt_ft: The altitude of the target in feet, used for logging and
+                    potential future focus modeling.
+
+        Returns:
+            True if the autofocus routine completes successfully and finds a
+            focus position above the sharpness threshold, False otherwise.
         """
         if self.shutdown_event and self.shutdown_event.is_set():
             logger.info("Autofocus aborted: shutdown.")
@@ -801,7 +848,14 @@ class IndiController(PyIndi.BaseClient):
 
     def guide_pulse(self, direction: str, duration_ms: int):
         """
-        Sends a guide pulse to the mount for a given duration.
+        Sends a directional guide pulse to the mount for optical tracking.
+
+        This is used to make small corrections to the mount's position based
+        on the detected center of the aircraft in a guide frame.
+
+        Args:
+            direction: The direction of the pulse ('N', 'S', 'E', or 'W').
+            duration_ms: The duration of the pulse in milliseconds.
         """
         duration_ms = max(0, int(duration_ms))
         if direction not in ('N', 'S', 'E', 'W'):

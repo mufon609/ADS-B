@@ -117,24 +117,28 @@ def _load_and_center(paths: List[str]) -> Tuple[List[np.ndarray], List[Tuple[flo
 
 
 def _align_images(images: List[np.ndarray], centers: List[Tuple[float, float]]) -> List[np.ndarray]:
-    """Translates images so the aircraft remains at a fixed location."""
+    """
+    Translates images so the aircraft remains at a fixed location, modifying
+    the input `images` list in-place.
+    """
     if len(images) < 2:
         return images
     ref_center = centers[0]
     H, W = images[0].shape
-    aligned: List[np.ndarray] = []
-    for img, ctr in zip(images, centers):
+    for i, (img, ctr) in enumerate(zip(images, centers)):
         if img.shape != (H, W):
             logger.warning(
                 f"  - Stacker: Shape mismatch (got {img.shape}, expected {(H, W)}), skipping frame.")
+            # Replace with a zero array to maintain list length, or handle removal
+            images[i] = np.zeros((H, W), dtype=img.dtype)
             continue
         dx = ref_center[0] - ctr[0]
         dy = ref_center[1] - ctr[1]
         M = np.float32([[1, 0, dx], [0, 1, dy]])
         shifted = cv2.warpAffine(
             img, M, (W, H), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101)
-        aligned.append(shifted)
-    return aligned
+        images[i] = shifted # Overwrite original image with aligned version
+    return images
 
 
 def _sigma_clipped_mean(volume: np.ndarray, clip_z: float = 3.0, max_iters: int = 5) -> Tuple[np.ndarray, float]:
@@ -205,14 +209,14 @@ def stack_images_multi(image_paths: List[str], output_dir: str, params: Dict) ->
         if len(images) < 2:
             qc["error"] = f"Stacking failed: Only {len(images)} usable frames loaded/detected for alignment."
             return products, qc
-        # Align images
-        aligned = _align_images(images, centers)
-        qc["n_frames_aligned"] = len(aligned)
-        if len(aligned) < 2:
+        # Align images (in-place)
+        images = _align_images(images, centers)
+        qc["n_frames_aligned"] = len(images)
+        if len(images) < 2:
             qc["error"] = "Stacking failed: Fewer than 2 images were successfully aligned."
             return products, qc
         # Build 3D volume
-        vol = np.stack(aligned, axis=0).astype(np.float32)
+        vol = np.stack(images, axis=0).astype(np.float32)
         # Parameters for robust and anomaly stacking
         clip_z = float(params.get("sigma_clip_z", 3.0))
         mask_r = int(params.get("anomaly_mask_radius_px", 20))

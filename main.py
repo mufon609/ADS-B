@@ -75,21 +75,40 @@ class CommandHandler(FileSystemEventHandler):
 
     def on_modified(self, event):
         """
-        Called when a file or directory is modified.
+        Called by the watchdog observer when a file is modified.
+
+        If the modified file is the command file, this method triggers
+        the command processing logic.
+
+        Args:
+            event: The file system event object.
         """
         if os.path.normpath(event.src_path) == self.command_file:
             self._process_command()
 
     def on_created(self, event):
         """
-        Called when a file or directory is created.
+        Called by the watchdog observer when a file is created.
+
+        If the created file is the command file, this method triggers
+        the command processing logic.
+
+        Args:
+            event: The file system event object.
         """
         if os.path.normpath(event.src_path) == self.command_file:
             self._process_command()
 
     def on_moved(self, event):
         """
-        Called when a file or directory is moved or renamed.
+        Called by the watchdog observer when a file is moved or renamed.
+
+        This handles atomic writes (e.g., `mv` or `os.replace`), which
+        often trigger a `moved` event. If the destination is the command
+        file, it triggers the command processing logic.
+
+        Args:
+            event: The file system event object.
         """
         # Watchdog triggers moved event even for atomic replace if dest exists
         if os.path.normpath(event.dest_path) == self.command_file:
@@ -311,15 +330,21 @@ class FileHandler(FileSystemEventHandler):
             except queue.Empty:
                 # This is normal, just loop and check shutdown_event
                 continue
-            except Exception as e:
+            except Exception:
                 # Log errors from the capture worker
-                logger.error(f"  Capture worker error: {e}")
-                traceback.print_exc()
+                logger.error("  Capture worker error:", exc_info=True)
 
         logger.info("  Capture worker thread shutting down.")
 
     def process_file(self):
-        """Processes aircraft.json, runs the scheduler, and manages state."""
+        """
+        Main orchestration logic triggered on `aircraft.json` updates.
+
+        This method reads the latest aircraft data, initializes the hardware
+        if necessary, selects the best tracking candidates, and manages the
+        application's state machine (idle, tracking, etc.). It is responsible
+        for deciding when to start a new tracking session via the scheduler.
+        """
         # --- File Stat Check & Debounce ---
         try:
             current_stat = os.stat(self.watch_file)
@@ -329,7 +354,7 @@ class FileHandler(FileSystemEventHandler):
             self.last_file_stat = current_stat
         except FileNotFoundError:
             return
-        except Exception as e:
+        except OSError as e:
             logger.warning(
                 f"Warning: Error stating file {self.watch_file}: {e}")
             return
@@ -459,19 +484,43 @@ class FileHandler(FileSystemEventHandler):
 
     def on_modified(self, event):
         """
-        Called when a file or directory is modified.
+        Called by the watchdog observer when a file is modified.
+
+        If the modified file is the `aircraft.json` file, this method
+        triggers the main processing logic.
+
+        Args:
+            event: The file system event object.
         """
         if os.path.normpath(event.src_path) == self.watch_file:
             self.process_file()
 
     def on_moved(self, event):
         """
-        Called when a file or directory is moved or renamed.
+        Called by the watchdog observer when a file is moved or renamed.
+
+        This handles atomic writes to `aircraft.json` (e.g., from dump1090),
+        which often trigger a `moved` event. If the destination is the
+        watch file, it triggers the main processing logic.
+
+        Args:
+            event: The file system event object.
         """
         if os.path.normpath(event.dest_path) == self.watch_file:
             self.process_file()
 
     def _predict_target_az_el(self, aircraft_data: dict, when: Optional[float] = None) -> Optional[tuple[float, float]]:
+        """
+        Predicts the Az/El coordinates of an aircraft at a specific time.
+
+        Args:
+            aircraft_data: Dictionary containing the aircraft's state vectors.
+            when: The Unix timestamp at which to predict the position.
+                  Defaults to the current time.
+
+        Returns:
+            A tuple of (azimuth, elevation) in degrees, or None if prediction fails.
+        """
         t = when or time.time()
         try:
             pos_list = estimate_positions_at_times(aircraft_data, [t])
@@ -683,7 +732,22 @@ class FileHandler(FileSystemEventHandler):
             self._run_scheduler()
 
     def track_aircraft(self, icao: str, aircraft_data: dict, start_state: dict, hardware_status: dict):
-        """The main tracking logic thread."""
+        """
+        Main tracking and guiding loop for a single aircraft.
+
+        This method is executed in a dedicated thread for each tracking session.
+        It performs the initial slew, autofocuses, and then enters a continuous
+        loop of capturing guide frames, detecting the aircraft's position,
+        sending guide pulses to the mount, and capturing science frames when
+        the guiding is stable.
+
+        Args:
+            icao: The ICAO identifier of the target aircraft.
+            aircraft_data: The most recent ADS-B data for the target.
+            start_state: Information about the calculated intercept point,
+                         including target Az/El and slew time.
+            hardware_status: The hardware status at the start of the track.
+        """
         try:
             if self.shutdown_event.is_set():
                 logger.info(
@@ -1309,8 +1373,8 @@ if __name__ == "__main__":
         # Notify the stacking orchestrator not to accept any new jobs
         try:
             request_shutdown()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Warning: Error during stack orchestrator request_shutdown: {e}")
         # Cancel any pending scheduler timer to avoid scheduling new track jobs
         if event_handler._scheduler_timer and event_handler._scheduler_timer.is_alive():
             event_handler._scheduler_timer.cancel()
@@ -1344,20 +1408,20 @@ if __name__ == "__main__":
             logger.info("Disconnecting hardware...")
             try:
                 event_handler.indi_controller.disconnect()
-            except Exception as e:
+            except Exception:
                 logger.warning(
-                    f"Warning: Error during hardware disconnect: {e}")
+                    "Warning: Error during hardware disconnect:", exc_info=True)
         try:
             if adsb_observer.is_alive():
                 adsb_observer.join(timeout=2.0)
             if command_observer.is_alive():
                 command_observer.join(timeout=2.0)
-        except RuntimeError:
-            pass
+        except RuntimeError as e:
+            logger.warning(f"Warning: Error joining observer threads: {e}")
         logger.info("Shutting down stack orchestrator...")
         try:
             shutdown_stack_orchestrator()
-        except Exception as e:
+        except RuntimeError as e:
             logger.warning(
                 f"Warning: Error during stack orchestrator shutdown: {e}")
         logger.info("Program terminated.")

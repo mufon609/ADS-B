@@ -36,8 +36,7 @@ def _fsync_dir(dir_path: str):
         finally:
             os.close(dir_fd)
     except Exception as e:
-        # Log the error but don't crash if fsync fails (e.g., permissions, OS support)
-        pass  # Allow operation to continue even if directory sync fails
+        logger.warning(f"Failed to fsync directory {dir_path}: {e}")
 
 
 def _read_log_object(file_path: str) -> Dict[str, Any]:
@@ -56,6 +55,7 @@ def _read_log_object(file_path: str) -> Dict[str, Any]:
                 return _blank()
             obj = json.loads(content)
     except (OSError, json.JSONDecodeError, UnicodeDecodeError) as e:
+        logger.warning(f"Error reading log file {file_path}: {e}")
         return _blank()
 
     # Basic structure validation and migration for old list-based format
@@ -117,9 +117,12 @@ def _should_rotate(file_path: str, new_records: Iterable[Dict[str, Any]], thresh
 
 def append_to_json(datas: List[Dict[str, Any]], file_path: str):
     """Appends records to a JSON log file atomically, with pre-emptive rotation."""
-    # Basic input validation
+    # Ensure datas is a list and not empty
     if not isinstance(datas, list) or not datas or not all(isinstance(x, dict) for x in datas):
         return
+    
+    # Ensure datas is a list for consistent handling, especially if it was an iterable
+    datas_list = list(datas)
 
     # Ensure target directory exists
     dir_path = os.path.dirname(file_path)
@@ -137,7 +140,7 @@ def append_to_json(datas: List[Dict[str, Any]], file_path: str):
 
     with _file_locks[file_path]:
         # Check if rotation is needed before reading the log
-        if _should_rotate(file_path, datas, threshold_bytes):
+        if _should_rotate(file_path, datas_list, threshold_bytes):
             if os.path.exists(file_path):
                 _rotate(file_path)
                 # After rotation, the current file path effectively doesn't exist for reading,
@@ -146,7 +149,7 @@ def append_to_json(datas: List[Dict[str, Any]], file_path: str):
         # Read existing log content (will return blank if file doesn't exist or after rotation)
         log_object = _read_log_object(file_path)
         # Append new data records
-        log_object['data'].extend(datas)
+        log_object['data'].extend(datas_list)
 
         # Prepare for atomic write using a temporary file in the same directory
         base_name = os.path.basename(file_path)
