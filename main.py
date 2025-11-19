@@ -511,212 +511,205 @@ class FileHandler(FileSystemEventHandler):
                 logger.debug("  Scheduler: Busy, skipping nested invocation.")
                 return
             self._scheduler_busy = True
+            try:
+                # Do not schedule new tracks during shutdown
+                if self.shutdown_event.is_set():
+                    # Skip scheduling entirely if the system is shutting down
+                    return
+                if self.is_scheduler_waiting:
+                    return
 
-            # Do not schedule new tracks during shutdown
-            if self.shutdown_event.is_set():
-                # Skip scheduling entirely if the system is shutting down
-                self._scheduler_busy = False
-                return
-            if self.is_scheduler_waiting:
-                self._scheduler_busy = False
-                return
+                # Check again inside the lock to avoid races
+                if self.shutdown_event.is_set():
+                    return
+                if self.current_track_icao:
+                    return
+                is_manual_override = bool(self.manual_target_icao)
+                if self.monitor_mode and not is_manual_override:
+                    logger.debug("  Scheduler: Monitor mode active; skipping auto-tracking.")
+                    return
 
-            # Check again inside the lock to avoid races
-            if self.shutdown_event.is_set():
-                self._scheduler_busy = False
-                return
-            if self.current_track_icao:
-                self._scheduler_busy = False
-                return
-            is_manual_override = bool(self.manual_target_icao)
-            if self.monitor_mode and not is_manual_override:
-                logger.debug("  Scheduler: Monitor mode active; skipping auto-tracking.")
-                self._scheduler_busy = False
-                return
+                if not self.indi_controller:
+                    logger.warning(
+                        "  Scheduler: Cannot run, hardware controller not ready.")
+                    return
+                hs = self.indi_controller.get_hardware_status() or {}
 
-            if not self.indi_controller:
-                logger.warning(
-                    "  Scheduler: Cannot run, hardware controller not ready.")
-                self._scheduler_busy = False
-                return
-            hs = self.indi_controller.get_hardware_status() or {}
-
-            if candidates is None:
-                aircraft_dict = read_aircraft_data()
-                current_az_el = hs.get("mount_az_el", (0.0, 0.0))
-                try:
-                    candidates = select_aircraft(
-                        aircraft_dict, current_az_el) or []
-                except Exception as e:
-                    logger.error(f"  Scheduler: Error selecting aircraft: {e}")
-                    candidates = []
-            else:
-                aircraft_dict = read_aircraft_data()
-
-            target_to_consider = None
-            is_manual_override = False
-
-            if self.manual_target_icao:
-                icao = self.manual_target_icao
-                logger.info(f"  Scheduler: Evaluating manual target {icao}...")
-                manual_target_in_candidates = next(
-                    (c for c in candidates if c['icao'] == icao), None)
-
-                if manual_target_in_candidates:
-                    logger.info(
-                        f"  Manual target {icao} is now viable (EV: {manual_target_in_candidates['ev']:.1f}). Selecting.")
-                    target_to_consider = manual_target_in_candidates
-                    is_manual_override = True
-                    self.manual_viability_info = None
-                    self.manual_override_active = icao
+                if candidates is None:
+                    aircraft_dict = read_aircraft_data()
+                    current_az_el = hs.get("mount_az_el", (0.0, 0.0))
+                    try:
+                        candidates = select_aircraft(
+                            aircraft_dict, current_az_el) or []
+                    except Exception as e:
+                        logger.error(f"  Scheduler: Error selecting aircraft: {e}")
+                        candidates = []
                 else:
-                    logger.info(
-                        f"  Manual target {icao} not in top candidates. Checking viability...")
-                    ok, reasons, details = evaluate_manual_target_viability(
-                        icao, aircraft_dict, observer_loc=self.observer_loc
-                    )
-                    ev_reason_text = None
-                    ev_val = None
-                    if ok and icao in aircraft_dict:
-                        try:
-                            current_az_el_ev = hs.get(
-                                "mount_az_el", (0.0, 0.0))  # Use hs here
-                            ev_res = calculate_expected_value(
-                                current_az_el_ev, icao, aircraft_dict[icao])
-                            ev_val = float(ev_res.get('ev', 0.0))
-                            if ev_val <= 0.0:
-                                ev_reason = ev_res.get(
-                                    'reason', 'unknown_ev_reason')
-                                reason_map = {
-                                    'no_intercept': "cannot slew to intercept within limits",
-                                    'late_intercept': "intercept occurs too late (outside horizon)",
-                                    'low_quality': "predicted quality below minimum during track",
-                                    'no_prediction': "cannot predict flight path",
-                                    'prediction_failed': "prediction calculation error"
-                                }
-                                ev_reason_text = reason_map.get(
-                                    ev_reason, f"EV too low ({ev_val:.2f})")
-                                if ev_reason_text not in reasons:
-                                    reasons.append(ev_reason_text)
-                        except Exception as e:
-                            logger.warning(
-                                f"  Warning: EV calculation failed for manual target {icao}: {e}")
-                            reasons.append("EV calculation failed")
+                    aircraft_dict = read_aircraft_data()
 
-                    self.manual_viability_info = {
-                        "viable": bool(ok and ev_val is not None and ev_val > 0.0),
-                        "reasons": reasons, "details": details, "ev": ev_val,
-                    }
-                    reason_str = "; ".join(
-                        reasons) if reasons else "basic checks passed, but EV <= 0 or not calculated"
-                    retry_s = float(CONFIG.get('selection', {}).get(
-                        'manual_retry_interval_s', 5.0))
-                    logger.info(
-                        f"  Manual target {icao} rejected: {reason_str}. Retrying in {retry_s}s.")
-                    write_status(
-                        {"manual_target": {"icao": icao, "viability": self.manual_viability_info}})
+                target_to_consider = None
+                is_manual_override = False
 
-                    if not self._scheduler_timer or not self._scheduler_timer.is_alive():
+                if self.manual_target_icao:
+                    icao = self.manual_target_icao
+                    logger.info(f"  Scheduler: Evaluating manual target {icao}...")
+                    manual_target_in_candidates = next(
+                        (c for c in candidates if c['icao'] == icao), None)
+
+                    if manual_target_in_candidates:
                         logger.info(
-                            f"  Scheduling retry for manual target in {retry_s}s.")
-                        self.is_scheduler_waiting = True
-                        self._scheduler_timer = threading.Timer(
-                            retry_s, self._run_scheduler_callback)  # Use callback
-                        self._scheduler_timer.daemon = True
-                        self._scheduler_timer.start()
-                    self._scheduler_busy = False
+                            f"  Manual target {icao} is now viable (EV: {manual_target_in_candidates['ev']:.1f}). Selecting.")
+                        target_to_consider = manual_target_in_candidates
+                        is_manual_override = True
+                        self.manual_viability_info = None
+                        self.manual_override_active = icao
+                        self.manual_target_icao = None
+                    else:
+                        logger.info(
+                            f"  Manual target {icao} not in top candidates. Checking viability...")
+                        ok, reasons, details = evaluate_manual_target_viability(
+                            icao, aircraft_dict, observer_loc=self.observer_loc
+                        )
+                        ev_reason_text = None
+                        ev_val = None
+                        if ok and icao in aircraft_dict:
+                            try:
+                                current_az_el_ev = hs.get(
+                                    "mount_az_el", (0.0, 0.0))  # Use hs here
+                                ev_res = calculate_expected_value(
+                                    current_az_el_ev, icao, aircraft_dict[icao])
+                                ev_val = float(ev_res.get('ev', 0.0))
+                                if ev_val <= 0.0:
+                                    ev_reason = ev_res.get(
+                                        'reason', 'unknown_ev_reason')
+                                    reason_map = {
+                                        'no_intercept': "cannot slew to intercept within limits",
+                                        'late_intercept': "intercept occurs too late (outside horizon)",
+                                        'low_quality': "predicted quality below minimum during track",
+                                        'no_prediction': "cannot predict flight path",
+                                        'prediction_failed': "prediction calculation error"
+                                    }
+                                    ev_reason_text = reason_map.get(
+                                        ev_reason, f"EV too low ({ev_val:.2f})")
+                                    if ev_reason_text not in reasons:
+                                        reasons.append(ev_reason_text)
+                            except Exception as e:
+                                logger.warning(
+                                    f"  Warning: EV calculation failed for manual target {icao}: {e}")
+                                reasons.append("EV calculation failed")
+
+                        self.manual_viability_info = {
+                            "viable": bool(ok and ev_val is not None and ev_val > 0.0),
+                            "reasons": reasons, "details": details, "ev": ev_val,
+                        }
+                        reason_str = "; ".join(
+                            reasons) if reasons else "basic checks passed, but EV <= 0 or not calculated"
+                        retry_s = float(CONFIG.get('selection', {}).get(
+                            'manual_retry_interval_s', 5.0))
+                        logger.info(
+                            f"  Manual target {icao} rejected: {reason_str}. Retrying in {retry_s}s.")
+                        write_status(
+                            {"manual_target": {"icao": icao, "viability": self.manual_viability_info}})
+
+                        if not self._scheduler_timer or not self._scheduler_timer.is_alive():
+                            logger.info(
+                                f"  Scheduling retry for manual target in {retry_s}s.")
+                            self.is_scheduler_waiting = True
+                            self._scheduler_timer = threading.Timer(
+                                retry_s, self._run_scheduler_callback)  # Use callback
+                            self._scheduler_timer.daemon = True
+                            self._scheduler_timer.start()
+                        return
+
+                if not target_to_consider:
+                    if candidates:
+                        target_to_consider = candidates[0]
+                    else:
+                        return
+
+                now = time.time()
+                if not all(k in target_to_consider for k in ['intercept_time', 'start_state']) or \
+                        not all(k in target_to_consider['start_state'] for k in ['time']):
+                    logger.warning(
+                        f"  Scheduler: Target {target_to_consider['icao']} missing required timing data. Skipping.")
                     return
 
-            if not target_to_consider:
-                if candidates:
-                    target_to_consider = candidates[0]
-                else:
-                    return
+                intercept_duration = target_to_consider['intercept_time']
+                track_start_time_abs = target_to_consider['start_state']['time']
+                slew_start_time_abs = track_start_time_abs - intercept_duration - 5.0
+                delay_needed = slew_start_time_abs - now
 
-            now = time.time()
-            if not all(k in target_to_consider for k in ['intercept_time', 'start_state']) or \
-                    not all(k in target_to_consider['start_state'] for k in ['time']):
-                logger.warning(
-                    f"  Scheduler: Target {target_to_consider['icao']} missing required timing data. Skipping.")
-                return
-
-            intercept_duration = target_to_consider['intercept_time']
-            track_start_time_abs = target_to_consider['start_state']['time']
-            slew_start_time_abs = track_start_time_abs - intercept_duration - 5.0
-            delay_needed = slew_start_time_abs - now
-
-            if delay_needed > 1.0:
-                wait_duration = min(delay_needed, 30.0)
-                if self._scheduler_timer and self._scheduler_timer.is_alive():
-                    self._scheduler_timer.cancel()
-                self.is_scheduler_waiting = True
-                self._scheduler_timer = threading.Timer(
-                    wait_duration, self._run_scheduler_callback)  # Use callback
-                self._scheduler_timer.daemon = True
-                self._scheduler_timer.start()
-                logger.info(
-                    f"  Scheduler: Waiting {wait_duration:.1f}s (of {delay_needed:.1f}s total) to start slew for {target_to_consider['icao']}.")
-                return
-
-            # --- Start Tracking ---
-            if self._scheduler_timer and self._scheduler_timer.is_alive():
-                self._scheduler_timer.cancel()
-                self._scheduler_timer = None
-            self.is_scheduler_waiting = False
-
-            icao_to_track = target_to_consider['icao']
-            latest_data = read_aircraft_data().get(icao_to_track)
-            if not latest_data:
-                logger.info(
-                    f"  Scheduler: No current data for {icao_to_track} just before starting track; deferring.")
-                if not self._scheduler_timer or not self._scheduler_timer.is_alive():
+                if delay_needed > 1.0:
+                    wait_duration = min(delay_needed, 30.0)
+                    if self._scheduler_timer and self._scheduler_timer.is_alive():
+                        self._scheduler_timer.cancel()
                     self.is_scheduler_waiting = True
                     self._scheduler_timer = threading.Timer(
-                        2.0, self._run_scheduler_callback)  # Retry in 2s, use callback
+                        wait_duration, self._run_scheduler_callback)  # Use callback
                     self._scheduler_timer.daemon = True
                     self._scheduler_timer.start()
-                return
+                    logger.info(
+                        f"  Scheduler: Waiting {wait_duration:.1f}s (of {delay_needed:.1f}s total) to start slew for {target_to_consider['icao']}.")
+                    return
 
-            self.current_track_icao = icao_to_track
-            self.current_track_ev = target_to_consider['ev']
-            self.track_stop_event.clear()
-            if not is_manual_override:
-                self.manual_override_active = None
+                # --- Start Tracking ---
+                if self._scheduler_timer and self._scheduler_timer.is_alive():
+                    self._scheduler_timer.cancel()
+                    self._scheduler_timer = None
+                self.is_scheduler_waiting = False
 
-            # Reset captures_taken for the new track.  Because we're already under track_lock at
-            # the start of this function, we do not acquire it again here.
-            self.captures_taken = 0
+                icao_to_track = target_to_consider['icao']
+                latest_data = read_aircraft_data().get(icao_to_track)
+                if not latest_data:
+                    logger.info(
+                        f"  Scheduler: No current data for {icao_to_track} just before starting track; deferring.")
+                    if not self._scheduler_timer or not self._scheduler_timer.is_alive():
+                        self.is_scheduler_waiting = True
+                        self._scheduler_timer = threading.Timer(
+                            2.0, self._run_scheduler_callback)  # Retry in 2s, use callback
+                        self._scheduler_timer.daemon = True
+                        self._scheduler_timer.start()
+                    return
 
-            write_status({"mode": "acquiring", "icao": icao_to_track})
-            
-            # --- ENHANCED LOGGING ---
-            ev_val = target_to_consider.get('ev', 0.0)
-            details = target_to_consider.get('score_details', {})
-            d_contrib = details.get('contrib_dist', 0.0)
-            c_contrib = details.get('contrib_close', 0.0)
-            i_contrib = details.get('contrib_int', 0.0)
-            raw_dist = details.get('raw_range_km', 0.0)
-            raw_rate = details.get('raw_closure_ms', 0.0)
-            raw_slew = details.get('raw_int_s', 0.0)
-            
-            logger.info(
-                f"  Scheduler: Starting track for {icao_to_track} (Total EV: {ev_val:.3f})\n"
-                f"    > Score Breakdown: Dist: {d_contrib:.2f} + Close: {c_contrib:.2f} + Slew: {i_contrib:.2f}\n"
-                f"    > Flight Stats:    {raw_dist:.1f}km Range | {raw_rate:+.0f}m/s Rate | {raw_slew:.1f}s Slew"
-            )
+                self.current_track_icao = icao_to_track
+                self.current_track_ev = target_to_consider['ev']
+                self.track_stop_event.clear()
+                if not is_manual_override:
+                    self.manual_override_active = None
 
-            start_state_info = target_to_consider['start_state'].copy()
-            start_state_info['slew_duration_s'] = intercept_duration
+                # Reset captures_taken for the new track.  Because we're already under track_lock at
+                # the start of this function, we do not acquire it again here.
+                self.captures_taken = 0
 
-            self.active_thread = threading.Thread(
-                target=self.track_aircraft,
-                args=(icao_to_track, latest_data, start_state_info, hs),
-                daemon=True
-            )
-            self.active_thread.start()
+                write_status({"mode": "acquiring", "icao": icao_to_track})
+                
+                # --- ENHANCED LOGGING ---
+                ev_val = target_to_consider.get('ev', 0.0)
+                details = target_to_consider.get('score_details', {})
+                d_contrib = details.get('contrib_dist', 0.0)
+                c_contrib = details.get('contrib_close', 0.0)
+                i_contrib = details.get('contrib_int', 0.0)
+                raw_dist = details.get('raw_range_km', 0.0)
+                raw_rate = details.get('raw_closure_ms', 0.0)
+                raw_slew = details.get('raw_int_s', 0.0)
+                
+                logger.info(
+                    f"  Scheduler: Starting track for {icao_to_track} (Total EV: {ev_val:.3f})\n"
+                    f"    > Score Breakdown: Dist: {d_contrib:.2f} + Close: {c_contrib:.2f} + Slew: {i_contrib:.2f}\n"
+                    f"    > Flight Stats:    {raw_dist:.1f}km Range | {raw_rate:+.0f}m/s Rate | {raw_slew:.1f}s Slew"
+                )
 
-        with self.track_lock:
-            self._scheduler_busy = False
+                start_state_info = target_to_consider['start_state'].copy()
+                start_state_info['slew_duration_s'] = intercept_duration
+
+                self.active_thread = threading.Thread(
+                    target=self.track_aircraft,
+                    args=(icao_to_track, latest_data, start_state_info, hs),
+                    daemon=True
+                )
+                self.active_thread.start()
+            finally:
+                self._scheduler_busy = False
 
     def _run_scheduler_callback(self):
         """Callback function used by the scheduler's timer."""
