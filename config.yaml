@@ -30,6 +30,7 @@ selection:
   max_range_nm: 100
   track_quality_min: 0.2
   sky_masks: []
+  manual_retry_interval_s: 10.0
   Bonus: true  # Added for debug visibility of the bonus flag
   # Weight definitions (not used when use_distance_only is enabled)
   weights:
@@ -65,6 +66,11 @@ hardware:
   camera_device_name: 'Player One Uranus-C Pro'
   focuser_device_name: 'ZWO EAF'
   max_slew_deg_s: 6.0
+
+park:
+  default_az_deg: 100.0
+  default_el_deg: 10.0
+  return_to_boot_orientation: false
 
 camera_specs:
   focal_length_mm: 500

@@ -7,7 +7,7 @@ import os
 import queue
 import threading
 import time
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 
 import astropy.units as u
 import cv2
@@ -50,10 +50,13 @@ class IndiController(PyIndi.BaseClient):
 
         is_dry_run = CONFIG['development']['dry_run']
 
+        self.boot_az_el: Optional[Tuple[float, float]] = None
+
         if is_dry_run:
             logger.info(
                 "[DRY RUN] IndiController initialized in dry-run mode.")
             self.simulated_az_el = (180.0, 45.0)
+            self.boot_az_el = self.simulated_az_el
             # Dummy devices for dry run to prevent errors later if attributes are accessed
             self.mount = None
             self.camera = None
@@ -172,6 +175,14 @@ class IndiController(PyIndi.BaseClient):
                         logger.info(f"  - Set Camera: Offset to {offset_val}.")
 
             logger.info("---------------------------------------")
+            try:
+                self.boot_az_el = self._get_current_az_el_internal()
+                logger.info(
+                    f"  Stored boot orientation at Az {self.boot_az_el[0]:.2f}, El {self.boot_az_el[1]:.2f}")
+            except Exception as e:
+                logger.warning(
+                    f"Warning: Could not determine boot orientation: {e}")
+                self.boot_az_el = None
 
         # Observer location is needed in both modes for coordinate conversions
         obs_cfg = CONFIG['observer']
@@ -906,72 +917,72 @@ class IndiController(PyIndi.BaseClient):
         self._set_switch_state(prop, widget_name, PyIndi.ISS_OFF)
 
     def park_mount(self) -> bool:
-        """Commands the mount to park."""
+        """
+        Commands the mount to park by slewing to a configured or remembered orientation.
+        """
+        park_cfg = CONFIG.get('park', {})
+        default_target = (
+            float(park_cfg.get('default_az_deg', 180.0)),
+            float(park_cfg.get('default_el_deg', 0.0)),
+        )
+        target_az_el: Tuple[float, float]
+        use_boot = bool(park_cfg.get('return_to_boot_orientation', False))
+        if use_boot and self.boot_az_el:
+            target_az_el = self.boot_az_el
+            logger.info(
+                f"Parking mount to stored boot orientation Az {target_az_el[0]:.2f}, El {target_az_el[1]:.2f}.")
+        else:
+            target_az_el = default_target
+            logger.info(
+                f"Parking mount to configured orientation Az {target_az_el[0]:.2f}, El {target_az_el[1]:.2f}.")
+
         if CONFIG['development']['dry_run']:
-            logger.info("[DRY RUN] Parking mount.")
-            self.simulated_az_el = (180.0, 0.0)
-            return True
+            logger.info("[DRY RUN] Parking slew simulation starting...")
+            return self.slew_to_az_el(target_az_el[0], target_az_el[1])
+
         if not self.mount:
             logger.error("Error: Mount not connected.")
             return False
 
-        park_prop = self.mount.getSwitch("TELESCOPE_PARK")
-        if not park_prop:
-            logger.warning("Warning: Mount does not support PARK.")
-            return False
-        park_widget = park_prop.findWidgetByName("PARK")
-        if not park_widget and len(park_prop) > 0:
-            park_widget = park_prop[0]
-        if not park_widget:
-            logger.error("Error: Cannot find PARK widget.")
-            return False
+        return self.slew_to_az_el(target_az_el[0], target_az_el[1])
 
-        self._set_switch_state(park_prop, park_widget.name, PyIndi.ISS_ON)
-        logger.info("Parking mount...")
-        park_timeout_at = time.time() + 120
+    def enter_idle_mode(self) -> bool:
+        """
+        Stops any active slews/exposures and leaves the hardware idling in place.
+        Intended for monitor mode where we continue observing ADS-B data but do not move.
+        """
+        logger.info("Preparing hardware for idle/monitor mode...")
+        if CONFIG['development']['dry_run']:
+            logger.info("[DRY RUN] Idle mode: holding simulated mount position.")
+            return True
 
-        park_finished_state = PyIndi.IPS_BUSY  # Wait for completion
-        while time.time() < park_timeout_at:
-            park_state_prop = self.mount.getSwitch("TELESCOPE_PARK")
-            if not park_state_prop:
-                logger.warning("Warning: Park property lost.")
-                park_finished_state = PyIndi.IPS_ALERT
-                break
-            park_finished_state = park_state_prop.s
-            if park_finished_state == PyIndi.IPS_BUSY:
-                if self.shutdown_event and self.shutdown_event.is_set():
-                    logger.info("Park aborted by shutdown.")
-                    return False
-                time.sleep(1)
-                continue
-            else:
-                break
-
-        final_prop = self.mount.getSwitch("TELESCOPE_PARK")
-        final_state = final_prop.s if final_prop else PyIndi.IPS_ALERT
-
-        if final_state == PyIndi.IPS_OK:  # Check final state
-            final_widget = final_prop.findWidgetByName(
-                park_widget.name) if final_prop and park_widget else None
-            if final_widget and final_widget.s == PyIndi.ISS_ON:
-                logger.info("Mount parked successfully.")
-                return True
-            else:
-                logger.warning(
-                    f"Warning: Park OK, but widget state unexpected.")
-                return True
-        elif final_state == PyIndi.IPS_ALERT:
-            logger.warning("Warning: Park failed (Alert).")
+        try:
+            if self.mount:
+                abort_prop = self.mount.getSwitch("TELESCOPE_ABORT_MOTION")
+                if abort_prop:
+                    widget = abort_prop.findWidgetByName("ABORT")
+                    if widget:
+                        self._set_switch_state(abort_prop, widget.name, PyIndi.ISS_ON)
+                stop_prop = self.mount.getSwitch("ON_COORD_SET")
+                if stop_prop and stop_prop.findWidgetByName("TRACK"):
+                    # Ensure tracking is enabled but not slewing further
+                    pass
+            if self.camera:
+                abort_exp = self.camera.getSwitch("CCD_ABORT_EXPOSURE")
+                if abort_exp:
+                    widget = abort_exp.findWidgetByName("ABORT")
+                    if widget:
+                        self._set_switch_state(abort_exp, widget.name, PyIndi.ISS_ON)
+            if self.focuser:
+                focuser_abort = self.focuser.getSwitch("FOCUS_ABORT_MOTION")
+                if focuser_abort:
+                    widget = focuser_abort.findWidgetByName("ABORT")
+                    if widget:
+                        self._set_switch_state(focuser_abort, widget.name, PyIndi.ISS_ON)
+        except Exception:
+            logger.warning("Warning: Error while entering idle mode:", exc_info=True)
             return False
-        elif final_state == PyIndi.IPS_BUSY:
-            logger.warning("Warning: Park timed out.")
-            return False
-        else:
-            state_str = {PyIndi.IPS_IDLE: "IDLE", PyIndi.IPS_OK: "OK", PyIndi.IPS_BUSY: "BUSY",
-                         PyIndi.IPS_ALERT: "ALERT"}.get(final_state, str(final_state))
-            logger.warning(
-                f"Warning: Park finished unexpected ({state_str}). Failure.")
-            return False
+        return True
 
     def snap_image(self, label: str) -> Optional[str]:
         """

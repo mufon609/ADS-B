@@ -21,7 +21,6 @@ from watchdog.observers import Observer
 
 from aircraft_selector import (
     calculate_expected_value,
-    calculate_quality,
     evaluate_manual_target_viability,
     select_aircraft,
 )
@@ -51,6 +50,13 @@ from status_writer import write_status
 from storage import append_to_json, ensure_log_dir
 
 logger = logging.getLogger(__name__)
+
+# === NEW: Import the modular command classes ===
+from commands.track import TrackCommand
+from commands.abort import AbortCommand
+from commands.park import ParkCommand
+from commands.idle import IdleCommand
+from commands.auto_track import AutoTrackCommand
 
 
 def _to_img_url(fs_path: str) -> str:
@@ -118,109 +124,37 @@ class CommandHandler(FileSystemEventHandler):
         """Reads and processes the command file, handling race conditions."""
         logger.info("--- Manual command detected! ---")
         try:
-            # Read command immediately after detection
+            # === NEW: Clean, extensible command dispatcher ===
             with open(self.command_file, 'r') as f:
-                command = json.load(f)
+                data = json.load(f)
 
-            # Attempt to delete immediately to prevent reprocessing
-            try:
-                os.remove(self.command_file)
-                logger.info(f"  Processed and removed command file.")
-            except OSError as e:
-                # Handle case where file might already be gone (another handler?)
-                logger.warning(
-                    f"  Note: Could not remove command file (possibly already gone): {e}")
-                pass  # Continue processing the command we read
+            # Atomic delete - fail loudly if gone (means another instance already processed it)
+            os.remove(self.command_file)
+            logger.info("Processed and removed command file.")
 
-            if 'track_icao' in command:
-                icao = command['track_icao'].lower().strip()
-                logger.info(f"  Manual override to track ICAO: {icao}")
+            # Command factory - infinitely extensible
+            command_map = {
+                'track_icao': TrackCommand,
+                'abort_track': AbortCommand,
+                'park_mount': ParkCommand,
+                'idle_monitor': IdleCommand,
+                'auto_track': AutoTrackCommand,
+            }
 
-                with self.main_handler.track_lock:
-                    # Cancel any pending scheduled task
-                    if self.main_handler._scheduler_timer and self.main_handler._scheduler_timer.is_alive():
-                        self.main_handler._scheduler_timer.cancel()
-                        self.main_handler._scheduler_timer = None
-                        # Reset flag (#6)
-                        self.main_handler.is_scheduler_waiting = False
-                        logger.info("  Cancelled pending scheduler timer.")
-                    # If currently tracking, request preemption
-                    if self.main_handler.current_track_icao and self.main_handler.active_thread and self.main_handler.active_thread.is_alive():
-                        logger.info(
-                            "  Interrupting current track for manual override...")
-                        self.main_handler.preempt_requested = True
-                        self.main_handler.shutdown_event.set()  # Signal current track to stop
-                    # Set or replace the manual request
-                    self.main_handler.manual_target_icao = icao
-                    # Clear previous manual viability info to recompute fresh
-                    self.main_handler.manual_viability_info = None
-                # Immediately try to run scheduler with the new manual target
-                # (needs to happen outside the lock to avoid deadlock if scheduler needs lock)
-                logger.info("  Triggering scheduler for manual target...")
-                self.main_handler._run_scheduler()
+            cmd_class = None
+            if 'track_icao' in data:
+                cmd_class = command_map['track_icao']
+            elif data.get('command') in command_map:
+                cmd_class = command_map[data.get('command')]
 
-            elif command.get('command') == 'abort_track':
-                logger.info("  Abort command received.")
-                with self.main_handler.track_lock:
-                    if self.main_handler._scheduler_timer and self.main_handler._scheduler_timer.is_alive():
-                        self.main_handler._scheduler_timer.cancel()
-                        self.main_handler._scheduler_timer = None
-                        # Reset flag (#6)
-                        self.main_handler.is_scheduler_waiting = False
-                        logger.info("  Cancelled pending scheduler timer.")
-                    # Clear any manual target requests
-                    self.main_handler.preempt_requested = False
-                    self.main_handler.manual_target_icao = None
-                    self.main_handler.manual_viability_info = None
-                    # Signal current track (if any) to stop
-                    if self.main_handler.current_track_icao:
-                        logger.info(
-                            f"  Signalling current track ({self.main_handler.current_track_icao}) to abort.")
-                        self.main_handler.shutdown_event.set()
-                    else:
-                        logger.info("  No active track to abort.")
+            if not cmd_class:
+                logger.warning(f"Unknown command received: {data}")
+                return
 
-            elif command.get('command') == 'park_mount':
-                logger.info("  Park command received.")
-                active_thread_to_join = None
-                with self.main_handler.track_lock:
-                    # Cancel scheduler, clear manual target
-                    if self.main_handler._scheduler_timer and self.main_handler._scheduler_timer.is_alive():
-                        self.main_handler._scheduler_timer.cancel()
-                        self.main_handler._scheduler_timer = None
-                        # Reset flag (#6)
-                        self.main_handler.is_scheduler_waiting = False
-                    self.main_handler.preempt_requested = False
-                    self.main_handler.manual_target_icao = None
-                    self.main_handler.manual_viability_info = None
-                    # Signal current track to stop and get reference for joining
-                    if self.main_handler.current_track_icao:
-                        logger.info(
-                            f"  Signalling current track ({self.main_handler.current_track_icao}) to stop before parking.")
-                        self.main_handler.shutdown_event.set()
-                        active_thread_to_join = self.main_handler.active_thread
-
-                # Wait for tracking thread to finish (outside lock)
-                if active_thread_to_join and active_thread_to_join.is_alive():
-                    logger.info("  Waiting for tracking thread to finish...")
-                    active_thread_to_join.join(
-                        timeout=10.0)  # Increased timeout
-                    if active_thread_to_join.is_alive():
-                        logger.warning(
-                            "  Warning: Tracking thread did not finish cleanly before parking.")
-
-                # Initiate parking in a separate thread (outside lock)
-                if self.main_handler.indi_controller:
-                    logger.info("  Initiating park command...")
-                    # Run park in its own thread so it doesn't block command handler
-                    threading.Thread(
-                        target=self.main_handler.indi_controller.park_mount, daemon=True).start()
-                else:
-                    logger.warning(
-                        "  Cannot park: Hardware controller not initialized.")
+            success = cmd_class(self.main_handler).execute(data)
+            logger.info(f"Command executed → {'SUCCESS' if success else 'FAILED'}")
 
         except FileNotFoundError:
-            # This can happen in a race condition if file is deleted between event and open
             logger.info(
                 "  Command file not found (likely already processed or deleted). Ignoring.")
         except json.JSONDecodeError as e:
@@ -260,15 +194,21 @@ class FileHandler(FileSystemEventHandler):
             logger.critical(f"FATAL: Invalid observer location in config: {e}")
             raise ValueError(f"Invalid observer location config: {e}") from e
 
-        self.shutdown_event = threading.Event()  # Signals tracking thread to stop
+        # Signals that the entire system is shutting down (Ctrl+C, fatal error, etc.)
+        self.shutdown_event = threading.Event()
+        # Signals that the *current* tracking thread should stop (manual preempt/abort)
+        self.track_stop_event = threading.Event()
         self.active_thread = None  # Reference to the current tracking thread
         self.last_file_stat = None  # To detect redundant file events
         self.manual_target_icao = None  # ICAO requested manually
         # Cache last manual viability details for status
         self.manual_viability_info = None
+        self.manual_override_active = None  # Keeps track of ongoing manual overrides
         self._scheduler_timer = None  # Timer for delayed scheduling
+        self._scheduler_busy = False  # Prevents re-entrant scheduler runs
         self.preempt_requested = False  # Flag for preemptive track switching
         self.is_scheduler_waiting = False
+        self.monitor_mode = False  # When True, system monitors but does not auto-track
         self.capture_queue = queue.Queue()
         self.capture_worker_thread = threading.Thread(
             target=self._capture_worker_loop, daemon=True)
@@ -277,6 +217,22 @@ class FileHandler(FileSystemEventHandler):
         # Shared counter for the number of images captured for the current track.
         # This counter is protected by track_lock and reset whenever a new track begins.
         self.captures_taken = 0
+
+
+    # === NEW: Nuclear forced reset for zombie/hung tracking threads ===
+    def _force_reset_tracking_state(self) -> None:
+        """Forcibly clear tracking state when a thread refuses to die (hardware lockup, etc.)."""
+        with self.track_lock:
+            if self.current_track_icao:
+                logger.warning(
+                    f"!!! NUCLEAR FORCE RESET: Clearing zombie track state for {self.current_track_icao} !!!"
+                )
+                self.current_track_icao = None
+                self.current_track_ev = 0.0
+                self.active_thread = None
+                self.preempt_requested = False
+                # We leave track_stop_event set so any straggler codepaths will still exit
+
 
     def _capture_worker_loop(self):
         """
@@ -372,7 +328,7 @@ class FileHandler(FileSystemEventHandler):
             try:
                 logger.info("Initializing hardware controller...")
                 self.indi_controller = IndiController()
-                self.indi_controller.shutdown_event = self.shutdown_event
+                self.indi_controller.shutdown_event = self.track_stop_event
                 logger.info("Hardware controller initialized.")
             except Exception as e:
                 logger.critical(f"FATAL: Hardware initialization failed: {e}")
@@ -405,7 +361,7 @@ class FileHandler(FileSystemEventHandler):
             candidates = []
 
         # Check for preemptive switch
-        if self.current_track_icao and candidates:
+        if self.current_track_icao and candidates and self.manual_override_active != self.current_track_icao:
             new_best_target = candidates[0]
             preempt_factor = float(
                 CONFIG['selection'].get('preempt_factor', 1.25))
@@ -422,7 +378,7 @@ class FileHandler(FileSystemEventHandler):
                         self._scheduler_timer = None
                         self.is_scheduler_waiting = False  # Reset flag (#6)
                     self.preempt_requested = True
-                    self.shutdown_event.set()
+                    self.track_stop_event.set()
 
         # --- Build Status Payload ---
         all_aircraft_list = []
@@ -465,7 +421,13 @@ class FileHandler(FileSystemEventHandler):
             }
         }
         status_payload.update(hardware_status)
-        status_payload["mode"] = "tracking" if self.current_track_icao else "idle"
+        if self.current_track_icao:
+            status_payload["mode"] = "tracking"
+        elif self.monitor_mode:
+            status_payload["mode"] = "monitor"
+        else:
+            status_payload["mode"] = "idle"
+        status_payload["monitor_mode"] = self.monitor_mode
 
         if self.manual_target_icao:
             status_payload["manual_target"] = {
@@ -545,22 +507,37 @@ class FileHandler(FileSystemEventHandler):
     def _run_scheduler(self, candidates: Optional[list] = None):
         """Decides whether to start a new track or wait."""
         with self.track_lock:
+            if self._scheduler_busy:
+                logger.debug("  Scheduler: Busy, skipping nested invocation.")
+                return
+            self._scheduler_busy = True
+
             # Do not schedule new tracks during shutdown
             if self.shutdown_event.is_set():
                 # Skip scheduling entirely if the system is shutting down
+                self._scheduler_busy = False
                 return
             if self.is_scheduler_waiting:
+                self._scheduler_busy = False
                 return
 
             # Check again inside the lock to avoid races
             if self.shutdown_event.is_set():
+                self._scheduler_busy = False
                 return
             if self.current_track_icao:
+                self._scheduler_busy = False
+                return
+            is_manual_override = bool(self.manual_target_icao)
+            if self.monitor_mode and not is_manual_override:
+                logger.debug("  Scheduler: Monitor mode active; skipping auto-tracking.")
+                self._scheduler_busy = False
                 return
 
             if not self.indi_controller:
                 logger.warning(
                     "  Scheduler: Cannot run, hardware controller not ready.")
+                self._scheduler_busy = False
                 return
             hs = self.indi_controller.get_hardware_status() or {}
 
@@ -590,8 +567,8 @@ class FileHandler(FileSystemEventHandler):
                         f"  Manual target {icao} is now viable (EV: {manual_target_in_candidates['ev']:.1f}). Selecting.")
                     target_to_consider = manual_target_in_candidates
                     is_manual_override = True
-                    self.manual_target_icao = None
                     self.manual_viability_info = None
+                    self.manual_override_active = icao
                 else:
                     logger.info(
                         f"  Manual target {icao} not in top candidates. Checking viability...")
@@ -632,14 +609,14 @@ class FileHandler(FileSystemEventHandler):
                     }
                     reason_str = "; ".join(
                         reasons) if reasons else "basic checks passed, but EV <= 0 or not calculated"
+                    retry_s = float(CONFIG.get('selection', {}).get(
+                        'manual_retry_interval_s', 5.0))
                     logger.info(
-                        f"  Manual target {icao} not viable: {reason_str}. Will keep trying.")
+                        f"  Manual target {icao} rejected: {reason_str}. Retrying in {retry_s}s.")
                     write_status(
                         {"manual_target": {"icao": icao, "viability": self.manual_viability_info}})
 
                     if not self._scheduler_timer or not self._scheduler_timer.is_alive():
-                        retry_s = float(CONFIG.get('selection', {}).get(
-                            'manual_retry_interval_s', 5.0))
                         logger.info(
                             f"  Scheduling retry for manual target in {retry_s}s.")
                         self.is_scheduler_waiting = True
@@ -647,6 +624,7 @@ class FileHandler(FileSystemEventHandler):
                             retry_s, self._run_scheduler_callback)  # Use callback
                         self._scheduler_timer.daemon = True
                         self._scheduler_timer.start()
+                    self._scheduler_busy = False
                     return
 
             if not target_to_consider:
@@ -701,15 +679,31 @@ class FileHandler(FileSystemEventHandler):
 
             self.current_track_icao = icao_to_track
             self.current_track_ev = target_to_consider['ev']
-            self.shutdown_event.clear()
+            self.track_stop_event.clear()
+            if not is_manual_override:
+                self.manual_override_active = None
 
             # Reset captures_taken for the new track.  Because we're already under track_lock at
             # the start of this function, we do not acquire it again here.
             self.captures_taken = 0
 
             write_status({"mode": "acquiring", "icao": icao_to_track})
+            
+            # --- ENHANCED LOGGING ---
+            ev_val = target_to_consider.get('ev', 0.0)
+            details = target_to_consider.get('score_details', {})
+            d_contrib = details.get('contrib_dist', 0.0)
+            c_contrib = details.get('contrib_close', 0.0)
+            i_contrib = details.get('contrib_int', 0.0)
+            raw_dist = details.get('raw_range_km', 0.0)
+            raw_rate = details.get('raw_closure_ms', 0.0)
+            raw_slew = details.get('raw_int_s', 0.0)
+            
             logger.info(
-                f"  Scheduler: Starting track thread for {icao_to_track} (EV: {target_to_consider['ev']:.1f})")
+                f"  Scheduler: Starting track for {icao_to_track} (Total EV: {ev_val:.3f})\n"
+                f"    > Score Breakdown: Dist: {d_contrib:.2f} + Close: {c_contrib:.2f} + Slew: {i_contrib:.2f}\n"
+                f"    > Flight Stats:    {raw_dist:.1f}km Range | {raw_rate:+.0f}m/s Rate | {raw_slew:.1f}s Slew"
+            )
 
             start_state_info = target_to_consider['start_state'].copy()
             start_state_info['slew_duration_s'] = intercept_duration
@@ -721,12 +715,16 @@ class FileHandler(FileSystemEventHandler):
             )
             self.active_thread.start()
 
+        with self.track_lock:
+            self._scheduler_busy = False
+
     def _run_scheduler_callback(self):
         """Callback function used by the scheduler's timer."""
         with self.track_lock:
             # If shutdown has been signaled, do not invoke the scheduler again
             self.is_scheduler_waiting = False  # Clear flag before running scheduler again
             if self.shutdown_event.is_set():
+                self._scheduler_busy = False
                 return
             # Now call the actual scheduler
             self._run_scheduler()
@@ -749,7 +747,7 @@ class FileHandler(FileSystemEventHandler):
             hardware_status: The hardware status at the start of the track.
         """
         try:
-            if self.shutdown_event.is_set():
+            if self.track_stop_event.is_set():
                 logger.info(
                     f"  Track [{icao}]: Aborted immediately before slew.")
                 return
@@ -791,7 +789,7 @@ class FileHandler(FileSystemEventHandler):
                 write_status(current_status)
                 return
 
-            if self.shutdown_event.is_set():
+            if self.track_stop_event.is_set():
                 logger.info(
                     f"  Track [{icao}]: Aborted after slew completion.")
                 return
@@ -807,7 +805,7 @@ class FileHandler(FileSystemEventHandler):
                              "error_message": "Autofocus failed"})
                 return
 
-            if self.shutdown_event.is_set():
+            if self.track_stop_event.is_set():
                 logger.info(
                     f"  Track [{icao}]: Aborted after focus completion.")
                 return
@@ -859,8 +857,6 @@ class FileHandler(FileSystemEventHandler):
             save_guide_png = guide_cfg.get('save_guide_png', True)
             min_sequence_interval_s = float(
                 CONFIG['capture'].get('min_sequence_interval_s', 1.0))
-            min_quality_threshold = float(
-                CONFIG['selection'].get('track_quality_min', 0.2))
 
             # --- Main Guide Loop ---
             while True:
@@ -889,7 +885,7 @@ class FileHandler(FileSystemEventHandler):
                 iteration += 1
                 loop_start_time = time.time()
 
-                if self.shutdown_event.is_set():
+                if self.track_stop_event.is_set():
                     logger.info(
                         f"  Track [{icao}]: Shutdown signaled, exiting guide loop.")
                     break
@@ -1063,20 +1059,23 @@ class FileHandler(FileSystemEventHandler):
                         next_sec_pos_est['est_lat'], next_sec_pos_est['est_lon'], next_sec_pos_est['est_alt'], now + 1.0, self.observer_loc)
                     ang_speed = angular_speed_deg_s(
                         (current_az, current_el), (next_sec_az, next_sec_el), 1.0, frame)
+                    # === NEW HARD SAFETY FILTERS (matches the hybrid selector exactly) ===
                     current_range_km = distance_km(
-                        self.observer_loc.lat.deg, self.observer_loc.lon.deg, current_pos_est['est_lat'], current_pos_est['est_lon'])
+                        self.observer_loc.lat.deg, self.observer_loc.lon.deg,
+                        current_pos_est['est_lat'], current_pos_est['est_lon'])
                     current_sun_sep = angular_sep_deg(
                         (current_az, current_el), (sun_az, sun_el), frame)
-                    current_quality_state = {
-                        'el': current_el, 'sun_sep': current_sun_sep, 'range_km': current_range_km, 'ang_speed': ang_speed}
-                    current_quality = calculate_quality(current_quality_state)
-                    if current_quality < min_quality_threshold:
+
+                    sel_cfg = CONFIG['selection']
+                    if (current_el < float(sel_cfg.get('min_elevation_deg', 5.0)) or
+                        current_range_km > float(sel_cfg.get('max_range_km', 100.0)) or
+                        current_sun_sep < float(sel_cfg.get('min_sun_separation_deg', 15.0))):
                         logger.info(
-                            f"  Track [{icao}]: Target quality ({current_quality:.2f}) dropped below threshold ({min_quality_threshold}). Ending track.")
+                            f" Track [{icao}]: Safety filter violated during track "
+                            f"(el={current_el:.1f}° range={current_range_km:.1f}km sun_sep={current_sun_sep:.1f}°). Ending track.")
                         break
                 except Exception as e:
-                    logger.error(
-                        f"  Track [{icao}]: Error during live quality check: {e}. Ending track for safety.")
+                    logger.error(f" Track [{icao}]: Error during live safety checks / prediction: {e}. Ending track.", exc_info=True)
                     break
 
                 status_payload = {
@@ -1105,7 +1104,6 @@ class FileHandler(FileSystemEventHandler):
                         "sharpness": detection.get('sharpness'),
                         "confidence": detection.get('confidence'),
                     },
-                    "current_quality": round(current_quality, 3),
                     "current_range_km": round(current_range_km, 1) if np.isfinite(current_range_km) else None,
                     "captures_taken": captures_taken,
                 }
@@ -1161,7 +1159,7 @@ class FileHandler(FileSystemEventHandler):
                 now = time.time()
                 if is_stable and (now - last_seq_ts) > min_sequence_interval_s:
                     # Before scheduling a new sequence, ensure we are not shutting down
-                    if self.shutdown_event.is_set():
+                    if self.track_stop_event.is_set():
                         break
                     logger.info(
                         f"  Track [{icao}]: Guiding stable. Capturing sequence...")
@@ -1240,7 +1238,7 @@ class FileHandler(FileSystemEventHandler):
                     }
 
                     # Do not queue new sequences if shutdown has been signaled
-                    if self.shutdown_event.is_set():
+                    if self.track_stop_event.is_set():
                         logger.info(
                             f"  Track [{icao}]: Shutdown signaled, skipping sequence scheduling.")
                         break
@@ -1275,10 +1273,16 @@ class FileHandler(FileSystemEventHandler):
                 self.current_track_ev = 0.0
                 self.active_thread = None
                 self.preempt_requested = False
+                if self.manual_override_active == finished_icao:
+                    self.manual_override_active = None
 
-            was_aborted_by_signal = self.shutdown_event.is_set()
+            was_aborted_by_signal = self.track_stop_event.is_set()
 
-            final_status = {"mode": "idle", "icao": None}
+            if self.monitor_mode:
+                final_mode = "monitor"
+            else:
+                final_mode = "idle"
+            final_status = {"mode": final_mode, "icao": None}
             if was_aborted_by_signal and not was_preempted:
                 logger.info(f"  Tracking for {finished_icao} was interrupted.")
                 if hasattr(self, 'manual_target_icao') and self.manual_target_icao == finished_icao:
@@ -1364,12 +1368,14 @@ if __name__ == "__main__":
                 logger.critical(
                     "Error: Watchdog observer thread died. Exiting.")
                 event_handler.shutdown_event.set()
+                event_handler.track_stop_event.set()
                 break
             time.sleep(2)
     except KeyboardInterrupt:
         logger.info("\nShutdown requested (Ctrl+C)...")
         # Signal all threads to stop and prevent new tracks from starting
         event_handler.shutdown_event.set()
+        event_handler.track_stop_event.set()
         # Notify the stacking orchestrator not to accept any new jobs
         try:
             request_shutdown()
@@ -1397,6 +1403,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"FATAL: Unhandled exception in main loop: {e}")
         event_handler.shutdown_event.set()
+        event_handler.track_stop_event.set()
         traceback.print_exc()
     finally:
         logger.info("Stopping observers...")

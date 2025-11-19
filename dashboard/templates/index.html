@@ -66,6 +66,8 @@
     </dl>
     <div class="controls">
         <form action="/command/abort" method="post" data-command="abort"><button type="submit" id="abortButton" class="danger" disabled>Abort Track</button></form>
+        <form action="/command/idle" method="post" data-command="idle"><button type="submit" id="idleButton">Idle / Monitor</button></form>
+        <form action="/command/auto" method="post" data-command="auto"><button type="submit" id="autoButton" disabled>Auto Track</button></form>
         <form action="/command/park" method="post" data-command="park"><button type="submit">Park Mount</button></form>
     </div>
   </article>
@@ -228,8 +230,13 @@ function createButtonForm(icao) {
 
 
 function updateDashboard(s) {
-    const isTracking = s.mode && s.mode !== 'idle' && s.mode !== 'initializing' && s.mode !== 'error';
+    const monitorMode = !!s.monitor_mode;
+    const isTracking = s.mode && !['idle', 'initializing', 'error', 'monitor'].includes(s.mode);
     q('#abortButton').disabled = !isTracking;
+    const idleBtn = q('#idleButton');
+    const autoBtn = q('#autoButton');
+    if (idleBtn) idleBtn.disabled = monitorMode || commandInFlight;
+    if (autoBtn) autoBtn.disabled = !monitorMode || commandInFlight;
 
     // Status Panel
     const statusEl = q('#statusText');
@@ -244,6 +251,8 @@ function updateDashboard(s) {
         modeText = `Tracking (Frame: ${s.iteration})`;
     } else if (s.mode === 'acquiring') {
         modeText = 'Acquiring Target...';
+    } else if (s.mode === 'monitor') {
+        modeText = 'Monitor Mode (Idle)';
     } else if (s.mode === 'idle') {
         modeText = 'Idle - Monitoring';
     }
@@ -441,6 +450,8 @@ function resetCommandButtons() {
         if (command === 'track' && btn.getAttribute('type') === 'submit') btn.textContent = 'Track';
         else if (command === 'abort') btn.textContent = 'Abort Track';
         else if (command === 'park') btn.textContent = 'Park Mount';
+        else if (command === 'idle') btn.textContent = 'Idle / Monitor';
+        else if (command === 'auto') btn.textContent = 'Auto Track';
     });
 }
 

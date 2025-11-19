@@ -431,6 +431,20 @@ async def command_park():
     return RedirectResponse("/", status_code=303)
 
 
+@app.post("/command/idle", response_class=RedirectResponse)
+async def command_idle():
+    """Places the system into monitor/idle mode without slewing."""
+    await asyncio.to_thread(write_command, {"command": "idle_monitor"})
+    return RedirectResponse("/", status_code=303)
+
+
+@app.post("/command/auto", response_class=RedirectResponse)
+async def command_auto():
+    """Re-enables automatic target selection/tracking."""
+    await asyncio.to_thread(write_command, {"command": "auto_track"})
+    return RedirectResponse("/", status_code=303)
+
+
 # --- WebSocket Endpoint ---
 
 @app.websocket("/ws/status")
