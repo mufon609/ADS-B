@@ -67,7 +67,4 @@ class TrackCommand(Command):
         logger.info("  Launching new track via scheduler...")
         self.context._run_scheduler()
 
-        # Extra safety net — if somehow still not tracking in 2s, force another run
-        threading.Timer(2.0, self.context._run_scheduler).start()
-
         return True

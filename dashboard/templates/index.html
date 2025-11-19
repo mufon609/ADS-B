@@ -28,10 +28,14 @@
         .connection-warning { color: #f44747; background-color: #3f1e1e; padding: 5px; border-radius: 3px; display: none; margin-bottom: 1rem; } 
 
         /* Commands */
-        .controls { display: flex; gap: 0.5rem; margin-top: 1rem; }
-        .controls button { padding: 0.25em 0.5em; margin: 0; }
+        .controls { display: flex; gap: 0.5rem; margin-top: 1rem; flex-wrap: wrap; }
+        .controls button { padding: 0.35em 0.9em; margin: 0; border-radius: 4px; border: 1px solid transparent; font-weight: 600; }
         button.danger { background-color: #a42; border-color: #831; color: white; }
-        button:disabled { background-color: #333; border-color: #333; cursor: not-allowed; }
+        button.auto-btn { color: #fff; }
+        button.auto-on { background-color: #2d8a34; border-color: #206423; }
+        button.auto-off { background-color: #a42; border-color: #831; }
+        button.busy { background-color: #569cd6 !important; border-color: #569cd6 !important; color: #0f0f0f; }
+        button:disabled:not(.busy) { background-color: #333; border-color: #333; cursor: not-allowed; }
         
         /* Stack Layouts */
         .stack-grid { display:grid; gap:1rem; grid-template-columns: repeat(auto-fit, minmax(260px,1fr)); }
@@ -66,10 +70,18 @@
     </dl>
     <div class="controls">
         <form action="/command/abort" method="post" data-command="abort"><button type="submit" id="abortButton" class="danger" disabled>Abort Track</button></form>
-        <form action="/command/idle" method="post" data-command="idle"><button type="submit" id="idleButton">Idle / Monitor</button></form>
-        <form action="/command/auto" method="post" data-command="auto"><button type="submit" id="autoButton" disabled>Auto Track</button></form>
+        <form action="/command/auto" method="post" data-command="auto"><button type="submit" id="autoButton" class="auto-btn auto-off">Auto Track</button></form>
         <form action="/command/park" method="post" data-command="park"><button type="submit">Park Mount</button></form>
     </div>
+  </article>
+
+  <article>
+    <h3>Scheduler & Manual Control</h3>
+    <dl class="mono">
+      <dt>Monitor Mode</dt><dd id="monitorModeText">Off</dd>
+      <dt>Manual Target</dt><dd id="manualTargetStatus">None</dd>
+      <dt>Scheduler</dt><dd id="schedulerStatus">Idle</dd>
+    </dl>
   </article>
 
   <article>
@@ -232,11 +244,12 @@ function createButtonForm(icao) {
 function updateDashboard(s) {
     const monitorMode = !!s.monitor_mode;
     const isTracking = s.mode && !['idle', 'initializing', 'error', 'monitor'].includes(s.mode);
-    q('#abortButton').disabled = !isTracking;
+    const abortBtn = q('#abortButton');
+    abortBtn.disabled = !(isTracking || has(s.manual_target));
     const idleBtn = q('#idleButton');
     const autoBtn = q('#autoButton');
     if (idleBtn) idleBtn.disabled = monitorMode || commandInFlight;
-    if (autoBtn) autoBtn.disabled = !monitorMode || commandInFlight;
+    if (autoBtn) autoBtn.disabled = (!monitorMode && !s.manual_target) || commandInFlight;
 
     // Status Panel
     const statusEl = q('#statusText');
@@ -257,6 +270,39 @@ function updateDashboard(s) {
         modeText = 'Idle - Monitoring';
     }
     statusEl.textContent = modeText;
+
+    q('#monitorModeText').textContent = monitorMode ? 'On' : 'Off';
+    const monitorEl = q('#monitorModeText');
+    monitorEl.className = monitorMode ? 'mono status-alert' : 'mono muted';
+
+    const manualInfo = s.manual_target || null;
+    if (manualInfo) {
+        let manualText = manualInfo.icao ? manualInfo.icao.toUpperCase() : 'Pending';
+        const viability = manualInfo.viability || {};
+        if (viability.viable === true) {
+            manualText += ' · viable';
+        } else if (Array.isArray(viability.reasons) && viability.reasons.length) {
+            manualText += ' · ' + viability.reasons.join('; ');
+        } else {
+            manualText += ' · evaluating';
+        }
+        q('#manualTargetStatus').textContent = manualText;
+    } else if (s.manual_override_active) {
+        q('#manualTargetStatus').textContent = `Tracking ${s.manual_override_active.toUpperCase()}`;
+    } else {
+        q('#manualTargetStatus').textContent = 'None';
+    }
+
+    let schedulerText = 'Auto';
+    if (monitorMode) schedulerText = 'Monitoring';
+    else if (manualInfo && manualInfo.viability && Array.isArray(manualInfo.viability.reasons) && manualInfo.viability.reasons.length) {
+        schedulerText = manualInfo.viability.reasons.join('; ');
+    } else if (manualInfo) {
+        schedulerText = `Waiting for ${manualInfo.icao?.toUpperCase() || 'target'}`;
+    } else if (s.manual_override_active) {
+        schedulerText = `Manual track: ${s.manual_override_active.toUpperCase()}`;
+    }
+    q('#schedulerStatus').textContent = schedulerText;
     
     q('#targetCoords').textContent = has(s.target_az_el) ? `az ${fmt(s.target_az_el[0])}, el ${fmt(s.target_az_el[1])}` : '—';
     q('#mountCoords').textContent = has(s.mount_az_el) ? `az ${fmt(s.mount_az_el[0])}, el ${fmt(s.mount_az_el[1])}` : '—';
@@ -445,12 +491,12 @@ function resetCommandButtons() {
     commandInFlight = false;
     document.querySelectorAll('.controls button, .table-track-form button').forEach(btn => {
         btn.disabled = false;
+        btn.classList.remove('busy');
         const command = btn.getAttribute('data-command') || 'track'; 
         
         if (command === 'track' && btn.getAttribute('type') === 'submit') btn.textContent = 'Track';
         else if (command === 'abort') btn.textContent = 'Abort Track';
         else if (command === 'park') btn.textContent = 'Park Mount';
-        else if (command === 'idle') btn.textContent = 'Idle / Monitor';
         else if (command === 'auto') btn.textContent = 'Auto Track';
     });
 }
@@ -485,6 +531,7 @@ function handleCommandForms() {
             document.querySelectorAll('button').forEach(b => b.disabled = true);
             if (command) {
                 btn.textContent = 'SENT...';
+                btn.classList.add('busy');
             }
         });
     });
