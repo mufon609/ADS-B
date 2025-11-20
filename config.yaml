@@ -27,7 +27,7 @@ selection:
   max_angular_speed_deg_s: 1.0
   preempt_factor: 1.25
   min_sun_separation_deg: 15
-  max_range_nm: 100
+  max_range_km: 185
   track_quality_min: 0.2
   sky_masks: []
   manual_retry_interval_s: 10.0
@@ -108,7 +108,9 @@ capture:
     guide_exposure_s: 0.2
     save_guide_png: true
     deadzone_px: 5
-    pulse_duration_ms: 100
+    proportional_gain: 20.0
+    min_pulse_ms: 10
+    max_pulse_ms: 500
     settle_time_s: 0.5
     max_consecutive_losses: 5
   

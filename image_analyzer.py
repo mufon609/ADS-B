@@ -366,16 +366,6 @@ def measure_sharpness(image_path: str) -> float:
     return _measure_sharpness_from_data(img_data)
 
 
-def detect_aircraft(image_path: str, sim_initial_error_s: float = 0.0) -> dict:
-    """Loads FITS image, detects aircraft-like blobs, and returns results including sharpness."""
-    img_data = _load_fits_data(image_path)
-    if img_data is None:
-        return {'detected': False, 'reason': 'load_error'}
-
-    # The internal function now handles all logic, including dry run simulation
-    return _detect_aircraft_from_data(img_data, original_shape=img_data.shape, sim_initial_error_s=sim_initial_error_s)
-
-
 def save_png_preview(fits_path: str, png_path_out: Optional[str] = None) -> str:
     """
     Creates a PNG preview from a FITS file.
