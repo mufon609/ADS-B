@@ -20,6 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional
 
 from config_loader import CONFIG, LOG_DIR
+from storage import rel_to_logs_url
 from stacker import stack_images
 
 logger = logging.getLogger(__name__)
@@ -52,21 +53,6 @@ def _ensure_executor() -> None:
                 # Ensure at least one worker
                 _executor = ThreadPoolExecutor(max_workers=max(1, max_workers))
 
-
-def _rel_to_logs_url(path: str) -> Optional[str]:
-    """Map an absolute path under LOG_DIR to a /logs/... URL for the manifest."""
-    if not path:
-        return None
-    try:
-        abs_path = os.path.abspath(path)
-        abs_root = os.path.abspath(LOG_DIR)
-        if os.path.commonpath([abs_path, abs_root]) != abs_root:
-            return None
-        rel = os.path.relpath(abs_path, abs_root).replace(os.sep, "/")
-        return f"/logs/{rel}"
-    except Exception:
-        logger.exception("Error mapping absolute path to /logs/ URL")
-        return None
 
 def schedule_stack_and_publish(sequence_id: str, image_paths: List[str], capture_meta: Dict) -> None:
     """
@@ -141,13 +127,13 @@ def _run_stacking_pipeline(sequence_id: str, image_paths: List[str], capture_met
             "stack_params_used": params,
             "qc": qc,
             "outputs": {
-                "master_fits": _rel_to_logs_url(master_fits) if master_fits else None,
-                "sequence_mean_png": _rel_to_logs_url(os.path.join(out_dir, "stack_mean.png")),
-                "sequence_robust_png": _rel_to_logs_url(os.path.join(out_dir, "stack_robust.png")),
-                "sequence_anomaly_png": _rel_to_logs_url(os.path.join(out_dir, "stack_anomaly.png")),
-                "sequence_mean_fits": _rel_to_logs_url(os.path.join(out_dir, "stack_mean.fits")),
-                "sequence_robust_fits": _rel_to_logs_url(os.path.join(out_dir, "stack_robust.fits")),
-                "sequence_anomaly_fits": _rel_to_logs_url(os.path.join(out_dir, "stack_anomaly.fits")),
+                "master_fits": rel_to_logs_url(master_fits) if master_fits else None,
+                "sequence_mean_png": rel_to_logs_url(os.path.join(out_dir, "stack_mean.png")),
+                "sequence_robust_png": rel_to_logs_url(os.path.join(out_dir, "stack_robust.png")),
+                "sequence_anomaly_png": rel_to_logs_url(os.path.join(out_dir, "stack_anomaly.png")),
+                "sequence_mean_fits": rel_to_logs_url(os.path.join(out_dir, "stack_mean.fits")),
+                "sequence_robust_fits": rel_to_logs_url(os.path.join(out_dir, "stack_robust.fits")),
+                "sequence_anomaly_fits": rel_to_logs_url(os.path.join(out_dir, "stack_anomaly.fits")),
             },
             "timestamp": int(time.time())
         }

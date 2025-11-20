@@ -8,7 +8,7 @@ import os
 import threading
 import time
 from collections import defaultdict
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Optional
 
 from config_loader import CONFIG, LOG_DIR
 
@@ -21,6 +21,22 @@ def ensure_log_dir():
     """Creates log directory and images subdir if they don't exist, using absolute paths."""
     os.makedirs(LOG_DIR, exist_ok=True)
     os.makedirs(os.path.join(LOG_DIR, 'images'), exist_ok=True)
+
+
+def rel_to_logs_url(path: str) -> Optional[str]:
+    """Map an absolute path under LOG_DIR to a /logs/... URL for UI links."""
+    if not path:
+        return None
+    try:
+        abs_path = os.path.abspath(path)
+        abs_root = os.path.abspath(LOG_DIR)
+        if os.path.commonpath([abs_path, abs_root]) != abs_root:
+            return None
+        rel = os.path.relpath(abs_path, abs_root).replace(os.sep, "/")
+        return f"/logs/{rel}"
+    except Exception:
+        logger.exception("Error mapping absolute path to /logs/ URL")
+        return None
 
 
 def _fsync_dir(dir_path: str):

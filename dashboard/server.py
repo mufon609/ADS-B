@@ -5,16 +5,7 @@ This version implements a high-performance WebSocket push architecture,
 mtime-based caching, and background scanning to minimize file I/O and latency.
 """
 from logger_config import setup_logging
-# Assuming config_loader is available, using placeholder imports for context
-# NOTE: In a real environment, these would be loaded from config_loader.py
-CONFIG = {
-    'adsb': {'json_file_path': 'data/aircraft.json'},
-    'observer': {'latitude_deg': 40.078653, 'longitude_deg': -74.545833, 'altitude_m': 20},
-    'logging': {'command_file': 'command.json'},
-    'selection': {'preempt_factor': 1.25, 'track_quality_min': 0.2},
-    'dashboard': {'host': '0.0.0.0', 'port': 8000}
-}
-LOG_DIR = "logs"
+from config_loader import CONFIG, LOG_DIR
 
 import asyncio
 import json
@@ -28,6 +19,7 @@ from typing import Dict, List, Optional, Tuple
 import uvicorn
 from fastapi import FastAPI, Form, Request, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from storage import rel_to_logs_url
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
@@ -150,22 +142,6 @@ def read_status_cached() -> Dict:
     return _STATUS_CACHE['data']
 
 
-def _rel_to_logs_url(path: str) -> Optional[str]:
-    """Map an absolute path under LOG_DIR to a /logs/... URL."""
-    try:
-        abs_path = os.path.abspath(path)
-        abs_root = os.path.abspath(LOG_DIR)
-        if os.path.commonpath([abs_path, abs_root]) != abs_root:
-            logger.warning(f"Warning: Attempted to access path outside LOG_DIR: {path}")
-            return None
-        rel = os.path.relpath(abs_path, abs_root)
-        url_path = rel.replace(os.sep, "/")
-        return f"/logs/{url_path}"
-    except Exception as e:
-        logger.warning(f"Warning: Error creating relative URL for path '{path}': {e}")
-        return None
-
-
 def _safe_read_json(path: str) -> Optional[dict]:
     """Safely reads a JSON file."""
     try:
@@ -202,9 +178,9 @@ def _collect_products(seq_dir: str) -> Dict[str, Dict[str, Optional[str]]]:
     for key, (png_name, fits_name) in variants.items():
         png_path = os.path.join(seq_dir, png_name)
         fits_path = os.path.join(seq_dir, fits_name)
-        png_url = _rel_to_logs_url(
+        png_url = rel_to_logs_url(
             png_path) if os.path.exists(png_path) else None
-        fits_url = _rel_to_logs_url(
+        fits_url = rel_to_logs_url(
             fits_path) if os.path.exists(fits_path) else None
         out[key] = {"png": png_url, "fits": fits_url}
     return out
