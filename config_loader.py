@@ -1,4 +1,4 @@
-#config_loader.py
+# config_loader.py
 """
 Loads and provides the application configuration from a YAML file.
 
@@ -7,8 +7,13 @@ configuration management for the local ADS‑B tracker implementation. It
 exposes a global ``CONFIG`` dictionary and a ``LOG_DIR`` string. The
 configuration is loaded from ``config.yaml`` in the project root by
 default, but can be overridden via the ``ADSB_CONFIG_FILE`` environment
-variable.  After loading, a few paths are expanded to absolute paths and
-the logging directories are created if necessary.
+variable. After loading, key paths (``logging.log_dir``, ``adsb.json_file_path``)
+are expanded to absolute paths and created if missing.
+
+Key knobs to be aware of:
+- ``development.dry_run``: when true, all hardware is simulated and INDI is not contacted.
+- ``selection``: target filtering and preemption thresholds.
+- ``capture`` / ``stacking``: exposure limits, burst size, and worker counts for stacking.
 """
 
 import logging
@@ -35,20 +40,22 @@ try:
     sel_cfg = CONFIG.get('selection', {})
     if 'max_range_nm' in sel_cfg and 'max_range_km' not in sel_cfg:
         raise ConfigError(
-            "Config uses deprecated 'selection.max_range_nm'. Please rename to 'selection.max_range_km' (in kilometers).")
+            "Config uses deprecated 'selection.max_range_nm'. "
+            "Please rename to 'selection.max_range_km' (in kilometers).")
 
     # --- Path Expansions and Directory Creation ---
     log_dir_rel = CONFIG.get('logging', {}).get('log_dir', 'logs')
     log_dir_abs = os.path.abspath(os.path.join(os.path.dirname(CONFIG_FILE), log_dir_rel))
     os.makedirs(log_dir_abs, exist_ok=True)
-    os.makedirs(os.path.join(log_dir_abs, 'images'), exist_ok=True)
 
     # Update config with absolute path for log_dir
     CONFIG['logging']['log_dir'] = log_dir_abs
 
     # Expand ADS-B JSON file path relative to config file
-    adsb_json_path_rel = CONFIG.get('adsb', {}).get('json_file_path', 'logs/aircraft.json')
-    adsb_json_path_abs = os.path.abspath(os.path.join(os.path.dirname(CONFIG_FILE), adsb_json_path_rel))
+    adsb_json_path_rel = CONFIG.get(
+        'adsb', {}).get('json_file_path', 'logs/aircraft.json')
+    adsb_json_path_abs = os.path.abspath(os.path.join(
+        os.path.dirname(CONFIG_FILE), adsb_json_path_rel))
     CONFIG['adsb']['json_file_path'] = adsb_json_path_abs
     os.makedirs(os.path.dirname(adsb_json_path_abs), exist_ok=True)
 

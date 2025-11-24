@@ -98,7 +98,8 @@ def calculate_plate_scale() -> float:
     if focal_length_mm <= 0:
          raise ValueError("Focal length must be positive.")
     if effective_pixel_size_um <= 0:
-         raise ValueError("Pixel size and binning must result in positive effective size.")
+         raise ValueError(
+             "Pixel size and binning must result in positive effective size.")
 
     # Plate Scale (arcsec/pixel) = (Pixel Size (microns) / Focal Length (mm)) * 206.265
     return (206.265 * effective_pixel_size_um) / focal_length_mm
@@ -118,7 +119,11 @@ def solve_intercept_time(current_az_el: tuple, target_azel_func, max_rate_deg_s:
         try:
             target_pos = target_azel_func(t)
             # Handle case where target function returns None (e.g., prediction failed)
-            if target_pos is None or target_pos[0] is None or target_pos[1] is None:
+            if (
+                (target_pos is None)
+                or (target_pos[0] is None)
+                or (target_pos[1] is None)
+            ):
                 # Treat prediction failure as if the function value is very large (no solution in range)
                 return float('inf')
 
@@ -150,7 +155,8 @@ def solve_intercept_time(current_az_el: tuple, target_azel_func, max_rate_deg_s:
     for _ in range(24):
         mid = 0.5 * (lo + hi)
         # Check if interval is too small to continue
-        if mid == lo or mid == hi: break
+        if (mid == lo) or (mid == hi):
+            break
         try:
             f_mid = f(mid)
             if not math.isfinite(f_mid): # Handle prediction failures mid-solve

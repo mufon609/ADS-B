@@ -30,17 +30,17 @@ def convert_numpy_types(obj):
             return None
         return int(obj) if isinstance(obj, np.integer) else float(obj)
     # Handle complex numbers (store as dict)
-    elif isinstance(obj, np.complexfloating): # More general check for complex
+    elif isinstance(obj, np.complexfloating):  # More general check for complex
         return {'real': obj.real, 'imag': obj.imag}
     # Handle NumPy arrays (convert to list)
     elif isinstance(obj, np.ndarray):
-        return convert_numpy_types(obj.tolist()) # Convert arrays to lists recursively
+        return convert_numpy_types(obj.tolist())  # Convert arrays to lists recursively
     # Handle NumPy boolean
     elif isinstance(obj, np.bool_):
         return bool(obj)
     # Handle NumPy void type (often from structured arrays)
     elif isinstance(obj, np.void):
-        return None # Represent void as null or handle appropriately
+        return None  # Represent void as null or handle appropriately
     # Return object unchanged if not a NumPy type or container
     return obj
 
@@ -59,7 +59,9 @@ def _deep_merge_dicts(d1, d2):
 def write_status(status: dict):
     """
     Updates the in-memory status cache and atomically writes the full status
-    to a JSON file the dashboard can read. Disk I/O happens outside the lock.
+    to a JSON file the dashboard can read.
+    Thread-safe via a lock; writes go through a temp file + rename with fsync,
+    and numpy types are converted for JSON safety.
     """
     global _current_status_cache # Explicitly modify global cache
 
@@ -82,12 +84,18 @@ def write_status(status: dict):
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
 
-            fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".status.", suffix=".json", text=True)
+            fd, tmp_path = tempfile.mkstemp(
+                dir=os.path.dirname(path),
+                prefix=".status.",
+                suffix=".json",
+                text=True
+            )
             try:
                 with os.fdopen(fd, "w", encoding='utf-8') as f: # Ensure UTF-8
                     # Ensure conversion just before dumping
                     json_compatible_status = convert_numpy_types(status_to_write)
-                    json.dump(json_compatible_status, f, indent=2, allow_nan=False) # Ensure allow_nan=False
+                    json.dump(
+                        json_compatible_status, f, indent=2, allow_nan=False)
                     f.flush()
                     os.fsync(f.fileno()) # Ensure data is on disk
                 os.replace(tmp_path, path) # Atomic rename

@@ -168,7 +168,11 @@ class CommandHandler(FileSystemEventHandler):
 
 
 class FileHandler(FileSystemEventHandler):
-    """Handles file events and orchestrates the tracking process."""
+    """
+    Handles file events and orchestrates the tracking process.
+    Owns the long-lived threads/events (scheduler, tracker, capture worker) and uses locks/events
+    to coordinate mount control, captures, and shutdown/preempt signals.
+    """
 
     def __init__(self, watch_file):
         """
@@ -244,6 +248,16 @@ class FileHandler(FileSystemEventHandler):
         logger.info("  Capture worker thread started.")
         while not self.shutdown_event.is_set():
             try:
+                # If a track stop was requested, drop any pending jobs for the old track
+                if self.track_stop_event.is_set():
+                    try:
+                        while True:
+                            self.capture_queue.get_nowait()
+                    except queue.Empty:
+                        pass
+                    time.sleep(0.1)
+                    continue
+
                 # Wait for a job, but timeout to check shutdown_event
                 job = self.capture_queue.get(timeout=1.0)
                 if job is None:
@@ -251,6 +265,10 @@ class FileHandler(FileSystemEventHandler):
 
                 (icao, final_exp, seq_log_base,
                  captures_taken_so_far, status_payload_base) = job
+
+                # Skip work if the track was preempted/aborted after enqueuing
+                if self.track_stop_event.is_set():
+                    continue
 
                 captured_paths = self.indi_controller.capture_sequence(
                     icao, final_exp)
@@ -306,8 +324,11 @@ class FileHandler(FileSystemEventHandler):
         # --- File Stat Check & Debounce ---
         try:
             current_stat = os.stat(self.watch_file)
-            if self.last_file_stat and (current_stat.st_mtime == self.last_file_stat.st_mtime and
-                                        current_stat.st_size == self.last_file_stat.st_size):
+            if (
+                self.last_file_stat
+                and (current_stat.st_mtime == self.last_file_stat.st_mtime)
+                and (current_stat.st_size == self.last_file_stat.st_size)
+            ):
                 return
             self.last_file_stat = current_stat
         except FileNotFoundError:
@@ -346,11 +367,14 @@ class FileHandler(FileSystemEventHandler):
         if not aircraft_dict:
             status_payload = hardware_status.copy()
             status_payload["mode"] = "tracking" if self.current_track_icao else "idle"
-            if self.manual_target_icao:
-                status_payload["manual_target"] = {
-                    "icao": self.manual_target_icao,
-                    "viability": self.manual_viability_info or {"viable": False, "reasons": ["no ADS-B data available"]},
-                }
+        if self.manual_target_icao:
+            status_payload["manual_target"] = {
+                "icao": self.manual_target_icao,
+                "viability": self.manual_viability_info or {
+                    "viable": False,
+                    "reasons": ["no ADS-B data available"],
+                },
+            }
             write_status(status_payload)
             return
 
@@ -363,12 +387,20 @@ class FileHandler(FileSystemEventHandler):
             candidates = []
 
         # Check for preemptive switch
-        if self.current_track_icao and candidates and self.manual_override_active != self.current_track_icao:
+        is_tracking_icao = self.current_track_icao is not None
+        has_candidates = bool(candidates)
+        is_manual_override_active = (self.manual_override_active
+                                     and self.manual_override_active != self.current_track_icao)
+
+        if is_tracking_icao and has_candidates and not is_manual_override_active:
             new_best_target = candidates[0]
             preempt_factor = float(
                 CONFIG['selection'].get('preempt_factor', 1.25))
-            if new_best_target['icao'] != self.current_track_icao and \
-                    new_best_target['ev'] > (self.current_track_ev * preempt_factor):
+            
+            is_new_target_different = new_best_target['icao'] != self.current_track_icao
+            is_new_target_better = new_best_target['ev'] > (self.current_track_ev * preempt_factor)
+            
+            if is_new_target_different and is_new_target_better:
                 logger.info(
                     f"--- PREEMPTIVE SWITCH: New target {new_best_target['icao']} "
                     f"(EV {new_best_target['ev']:.1f}) > Current {self.current_track_icao} "
@@ -507,7 +539,11 @@ class FileHandler(FileSystemEventHandler):
             return None
 
     def _run_scheduler(self, candidates: Optional[list] = None):
-        """Decides whether to start a new track or wait."""
+        """
+        Decides whether to start a new track or wait.
+        Skips scheduling when monitor mode is active (unless manual override), during shutdown,
+        or when a track is already active; respects manual targets and preemption.
+        """
         with self.track_lock:
             if self._scheduler_busy:
                 logger.debug("  Scheduler: Busy, skipping nested invocation.")
@@ -560,7 +596,11 @@ class FileHandler(FileSystemEventHandler):
 
                     if manual_target_in_candidates:
                         logger.info(
-                            f"  Manual target {icao} is now viable (EV: {manual_target_in_candidates['ev']:.1f}). Selecting.")
+                            "  Manual target %s is now viable (EV: %.1f). "
+                            "Selecting.",
+                            icao,
+                            manual_target_in_candidates['ev']
+                        )
                         target_to_consider = manual_target_in_candidates
                         is_manual_override = True
                         self.manual_viability_info = None
@@ -630,8 +670,12 @@ class FileHandler(FileSystemEventHandler):
                         return
 
                 now = time.time()
-                if not all(k in target_to_consider for k in ['intercept_time', 'start_state']) or \
-                        not all(k in target_to_consider['start_state'] for k in ['time']):
+                has_intercept_time = 'intercept_time' in target_to_consider
+                has_start_state = 'start_state' in target_to_consider
+                has_start_state_time = (has_start_state
+                                        and 'time' in target_to_consider['start_state'])
+
+                if not (has_intercept_time and has_start_state and has_start_state_time):
                     logger.warning(
                         f"  Scheduler: Target {target_to_consider['icao']} missing required timing data. Skipping.")
                     return
@@ -651,7 +695,11 @@ class FileHandler(FileSystemEventHandler):
                     self._scheduler_timer.daemon = True
                     self._scheduler_timer.start()
                     logger.info(
-                        f"  Scheduler: Waiting {wait_duration:.1f}s (of {delay_needed:.1f}s total) to start slew for {target_to_consider['icao']}.")
+                    "  Scheduler: Waiting %.1fs (of %.1fs total) to start slew for %s.",
+                    wait_duration,
+                    delay_needed,
+                    target_to_consider['icao']
+                )
                     return
 
                 # --- Start Tracking ---
@@ -697,8 +745,10 @@ class FileHandler(FileSystemEventHandler):
                 
                 logger.info(
                     f"  Scheduler: Starting track for {icao_to_track} (Total EV: {ev_val:.3f})\n"
-                    f"    > Score Breakdown: Dist: {d_contrib:.2f} + Close: {c_contrib:.2f} + Slew: {i_contrib:.2f}\n"
-                    f"    > Flight Stats:    {raw_dist:.1f}km Range | {raw_rate:+.0f}m/s Rate | {raw_slew:.1f}s Slew"
+                    f"    > Score Breakdown: Dist: {d_contrib:.2f} + Close: "
+                    f"{c_contrib:.2f} + Slew: {i_contrib:.2f}\n"
+                    f"    > Flight Stats:    {raw_dist:.1f}km Range | "
+                    f"{raw_rate:+.0f}m/s Rate | {raw_slew:.1f}s Slew"
                 )
 
                 start_state_info = target_to_consider['start_state'].copy()
@@ -987,7 +1037,16 @@ class FileHandler(FileSystemEventHandler):
                     sharp = detection.get('sharpness', -1)
                     conf = detection.get('confidence', -1)
                     logger.info(
-                        f"  Track [{icao}]: Guide frame {iteration}: Target lost ({consecutive_losses}/{max_losses}). Reason: {reason} (Sharp: {sharp:.1f}, Conf: {conf:.2f})")
+                        "  Track [%s]: Guide frame %d: Target lost (%d/%d). "
+                        "Reason: %s (Sharp: %.1f, Conf: %.2f)",
+                        icao,
+                        iteration,
+                        consecutive_losses,
+                        max_losses,
+                        reason,
+                        sharp,
+                        conf,
+                    )
                     write_status({"mode": "tracking", "icao": icao, "iteration": iteration,
                                  "stable": False, "last_guide_png": guide_png_url, "guide_offset_px": None})
                     if consecutive_losses >= max_losses:
@@ -1049,9 +1108,19 @@ class FileHandler(FileSystemEventHandler):
                         break
                     current_pos_est, next_sec_pos_est = est_list[0], est_list[1]
                     current_az, current_el = latlonalt_to_azel(
-                        current_pos_est['est_lat'], current_pos_est['est_lon'], current_pos_est['est_alt'], now, self.observer_loc)
+                        current_pos_est['est_lat'],
+                        current_pos_est['est_lon'],
+                        current_pos_est['est_alt'],
+                        now,
+                        self.observer_loc,
+                    )
                     next_sec_az, next_sec_el = latlonalt_to_azel(
-                        next_sec_pos_est['est_lat'], next_sec_pos_est['est_lon'], next_sec_pos_est['est_alt'], now + 1.0, self.observer_loc)
+                        next_sec_pos_est['est_lat'],
+                        next_sec_pos_est['est_lon'],
+                        next_sec_pos_est['est_alt'],
+                        now + 1.0,
+                        self.observer_loc,
+                    )
                     ang_speed = angular_speed_deg_s(
                         (current_az, current_el), (next_sec_az, next_sec_el), 1.0, frame)
                     # === NEW HARD SAFETY FILTERS (matches the hybrid selector exactly) ===
@@ -1062,15 +1131,31 @@ class FileHandler(FileSystemEventHandler):
                         (current_az, current_el), (sun_az, sun_el), frame)
 
                     sel_cfg = CONFIG['selection']
-                    if (current_el < float(sel_cfg.get('min_elevation_deg', 5.0)) or
-                        current_range_km > float(sel_cfg.get('max_range_km', 100.0)) or
-                        current_sun_sep < float(sel_cfg.get('min_sun_separation_deg', 15.0))):
+                    is_low_elevation = current_el < float(sel_cfg.get(
+                        'min_elevation_deg', 5.0))
+                    is_out_of_range = current_range_km > float(sel_cfg.get(
+                        'max_range_km', 100.0))
+                    is_too_close_to_sun = current_sun_sep < float(sel_cfg.get(
+                        'min_sun_separation_deg', 15.0))
+
+                    if is_low_elevation or is_out_of_range or is_too_close_to_sun:
                         logger.info(
-                            f" Track [{icao}]: Safety filter violated during track "
-                            f"(el={current_el:.1f}° range={current_range_km:.1f}km sun_sep={current_sun_sep:.1f}°). Ending track.")
+                            " Track [%s]: Safety filter violated during track "
+                            "(el=%.1f° range=%.1fkm sun_sep=%.1f°). Ending track.",
+                            icao,
+                            current_el,
+                            current_range_km,
+                            current_sun_sep,
+                        )
                         break
                 except Exception as e:
-                    logger.error(f" Track [{icao}]: Error during live safety checks / prediction: {e}. Ending track.", exc_info=True)
+                    logger.error(
+                        " Track [%s]: Error during live safety checks / prediction: %s. "
+                        "Ending track.",
+                        icao,
+                        e,
+                        exc_info=True,
+                    )
                     break
 
                 status_payload = {
@@ -1326,8 +1411,9 @@ if __name__ == "__main__":
     adsb_watch_path = os.path.dirname(adsb_watch_file)
     if not os.path.exists(adsb_watch_path):
         exit(1)
-    if not os.path.exists(adsb_watch_file): logger.warning(
-        f"Warning: ADS-B file '{adsb_watch_file}' does not exist yet...")
+    if not os.path.exists(adsb_watch_file):
+        logger.warning(
+            f"Warning: ADS-B file '{adsb_watch_file}' does not exist yet...")
 
     event_handler = FileHandler(adsb_watch_file)
     logger.info("Performing initial read of aircraft data...")
@@ -1374,7 +1460,10 @@ if __name__ == "__main__":
         logger.info(
             f"Monitoring '{LOG_DIR}' for command file '{CONFIG['logging']['command_file']}'...")
         while True:
-            if not adsb_observer.is_alive() or not command_observer.is_alive():
+            adsb_observer_alive = adsb_observer.is_alive()
+            command_observer_alive = command_observer.is_alive()
+
+            if not adsb_observer_alive or not command_observer_alive:
                 logger.critical(
                     "Error: Watchdog observer thread died. Exiting.")
                 event_handler.shutdown_event.set()

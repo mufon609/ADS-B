@@ -118,6 +118,10 @@ development:
 # 3. uvicorn dashboard.server:app --reload --port 8000
 ```
 
+### Dry-run vs. Hardware
+- Set `development.dry_run: true` in `config.yaml` to simulate mount/camera/focuser and use the built-in fake ADS-B source.
+- Set `dry_run: false` to talk to real INDI devices using the names/host/port in `hardware` and the camera settings in `camera_specs`.
+
 ## Core Operation Loop (main.py)
 
 1. Scan `aircraft.json` every 0.5 s → recompute Expected Value for all aircraft

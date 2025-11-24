@@ -44,7 +44,8 @@ def _normalize_to_png(arr: np.ndarray, lo_pct: float = 1.0, hi_pct: float = 99.0
     lo, hi = np.percentile(finite, [lo_pct, hi_pct])
     if hi <= lo:
         hi = lo + 1e-6
-    arr = np.nan_to_num(arr, nan=lo, posinf=hi, neginf=lo)
+    arr = np.nan_to_num(
+        arr, nan=lo, posinf=hi, neginf=lo)
     arr = np.clip((arr - lo) / (hi - lo), 0.0, 1.0)
     return (arr * 255.0).astype(np.uint8)
 
@@ -52,7 +53,9 @@ def _normalize_to_png(arr: np.ndarray, lo_pct: float = 1.0, hi_pct: float = 99.0
 def _write_fits(path: str, data: np.ndarray) -> str:
     """Writes a NumPy array to a FITS file, creating directories as needed."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    if data.dtype not in [np.float32, np.int16, np.int32, np.uint16]:
+    if data.dtype not in [
+        np.float32, np.int16, np.int32, np.uint16
+    ]:
         data = data.astype(np.float32)
     fits.HDUList([fits.PrimaryHDU(data)]).writeto(
         path, overwrite=True, checksum=True)
@@ -89,11 +92,20 @@ def _load_and_center(paths: List[str]) -> Tuple[List[np.ndarray], List[Tuple[flo
             logger.error(
                 f"  - Stacker: Detection function failed on frame {i+1} ({os.path.basename(p)}): {e}")
             det = None
-        if det and det.get("detected") and det.get("center_px") is not None:
+        if (
+            det
+            and det.get("detected")
+            and det.get("center_px") is not None
+        ):
             ctr_candidate = det.get("center_px")
-            if (isinstance(ctr_candidate, (tuple, list)) and len(ctr_candidate) == 2 and
-                    isinstance(ctr_candidate[0], (int, float)) and isinstance(ctr_candidate[1], (int, float)) and
-                    np.isfinite(ctr_candidate[0]) and np.isfinite(ctr_candidate[1])):
+            if (
+                isinstance(ctr_candidate, (tuple, list))
+                and len(ctr_candidate) == 2
+                and isinstance(ctr_candidate[0], (int, float))
+                and isinstance(ctr_candidate[1], (int, float))
+                and np.isfinite(ctr_candidate[0])
+                and np.isfinite(ctr_candidate[1])
+            ):
                 ctr = ctr_candidate
             else:
                 logger.warning(
@@ -101,10 +113,15 @@ def _load_and_center(paths: List[str]) -> Tuple[List[np.ndarray], List[Tuple[flo
                 ctr = None
                 skipped += 1
         else:
-            reason = det.get(
-                'reason', 'detection_failed') if det else 'load_failed_or_detect_exception'
+            reason = det.get('reason', 'detection_failed') if det else \
+                'load_failed_or_detect_exception'
             logger.warning(
-                f"  - Stacker: No valid detection in frame {i+1} ({os.path.basename(p)}). Reason: {reason}. Skipping frame.")
+                "  - Stacker: No valid detection in frame %d (%s). "
+                "Reason: %s. Skipping frame.",
+                i + 1,
+                os.path.basename(p),
+                reason,
+            )
             ctr = None
             skipped += 1
         if ctr is not None:
@@ -128,7 +145,8 @@ def _align_images(images: List[np.ndarray], centers: List[Tuple[float, float]]) 
     for i, (img, ctr) in enumerate(zip(images, centers)):
         if img.shape != (H, W):
             logger.warning(
-                f"  - Stacker: Shape mismatch (got {img.shape}, expected {(H, W)}), skipping frame.")
+                f"  - Stacker: Shape mismatch (got {img.shape}, "
+                f"expected {(H, W)}), skipping frame.")
             # Replace with a zero array to maintain list length, or handle removal
             images[i] = np.zeros((H, W), dtype=img.dtype)
             continue
@@ -143,7 +161,7 @@ def _align_images(images: List[np.ndarray], centers: List[Tuple[float, float]]) 
 
 def _sigma_clipped_mean(volume: np.ndarray, clip_z: float = 3.0, max_iters: int = 5) -> Tuple[np.ndarray, float]:
     """Computes a robust mean via iterative sigma-clipping along the frame axis."""
-    if volume.ndim != 3 or volume.shape[0] < 2:
+    if (volume.ndim != 3) or (volume.shape[0] < 2):
         return np.nanmean(volume, axis=0), 0.0
     try:
         mean_stack, _, _ = sigma_clipped_stats(
@@ -158,7 +176,9 @@ def _sigma_clipped_mean(volume: np.ndarray, clip_z: float = 3.0, max_iters: int 
             mean_stack.mask) if hasattr(mean_stack, 'mask') else 0
         total_pixels = mean_stack.size if hasattr(mean_stack, 'size') else 0
         masked_fraction = (
-            masked_pixels / total_pixels) if total_pixels > 0 else 0.0
+            (masked_pixels / total_pixels) if total_pixels > 0
+            else 0.0
+        )
 
         if hasattr(mean_stack, 'filled'):
             fill_val = np.nanmedian(volume, axis=0)
@@ -173,8 +193,12 @@ def _sigma_clipped_mean(volume: np.ndarray, clip_z: float = 3.0, max_iters: int 
 
 def _anomaly_map(volume: np.ndarray, mask_radius_px: int = 20) -> np.ndarray:
     """Generates an anomaly map by finding max absolute Z-score per pixel."""
-    if volume.ndim != 3 or volume.shape[0] < 2:
-        return np.zeros_like(volume[0]) if volume.ndim == 3 and volume.size > 0 else np.zeros((100, 100), dtype=np.float32)
+    if (volume.ndim != 3) or (volume.shape[0] < 2):
+        return (
+            np.zeros_like(volume[0])
+            if volume.ndim == 3 and volume.size > 0
+            else np.zeros((100, 100), dtype=np.float32)
+        )
     N, H, W = volume.shape
     med = np.nanmedian(volume, axis=0)
     abs_dev = np.abs(volume - med)
@@ -189,12 +213,17 @@ def _anomaly_map(volume: np.ndarray, mask_radius_px: int = 20) -> np.ndarray:
         y, x = np.ogrid[:H, :W]
         dist_sq = (x - cx)**2 + (y - cy)**2
         mask = dist_sq <= mask_radius_px**2
-        z_abs_max = np.where(mask, z_abs_max * 0.25, z_abs_max)
+        z_abs_max = np.where(
+            mask, z_abs_max * 0.25, z_abs_max)
     return z_abs_max.astype(np.float32)
 
 
 def stack_images_multi(image_paths: List[str], output_dir: str, params: Dict) -> Tuple[Dict, Dict]:
-    """Main stacking pipeline with concurrent computations for speed."""
+    """
+    Main stacking pipeline with concurrent computations for speed.
+    Loads/detects/aligns frames, then uses an internal ThreadPoolExecutor for mean/robust/anomaly stacks.
+    Requires at least 2 usable frames; returns product paths and a QC dict (with errors when applicable).
+    """
     qc: Dict = {}
     products: Dict = {}
     if not image_paths:
@@ -207,7 +236,10 @@ def stack_images_multi(image_paths: List[str], output_dir: str, params: Dict) ->
         qc["n_frames_input"] = len(image_paths)
         qc["n_frames_loaded_detected"] = len(images)
         if len(images) < 2:
-            qc["error"] = f"Stacking failed: Only {len(images)} usable frames loaded/detected for alignment."
+            qc["error"] = (
+                f"Stacking failed: Only {len(images)} usable frames "
+                "loaded/detected for alignment."
+            )
             return products, qc
         # Align images (in-place)
         images = _align_images(images, centers)
@@ -261,8 +293,9 @@ def stack_images_multi(image_paths: List[str], output_dir: str, params: Dict) ->
             vmin, vmax = np.percentile(anomaly_finite, [1, 99.5])
             if vmax <= vmin:
                 vmax = vmin + 1e-6
-            anomaly_scaled_u16 = np.clip(
-                (anomaly - vmin) / (vmax - vmin), 0, 1) * 65535
+            anomaly_scaled_u16 = (
+                np.clip((anomaly - vmin) / (vmax - vmin), 0, 1) * 65535
+            )
             anomaly_scaled_u16 = np.nan_to_num(
                 anomaly_scaled_u16, nan=0).astype(np.uint16)
         else:
@@ -304,8 +337,10 @@ def stack_images_multi(image_paths: List[str], output_dir: str, params: Dict) ->
         if not saved_products.get("robust", {}).get("fits"):
             qc["error"] = "Stacking failed: Could not save the primary robust FITS file."
             return saved_products, qc
-        qc["status"] = "success" if "error" not in qc and not qc.get(
-            "save_errors") else "partial_success"
+        qc["status"] = (
+            "success" if "error" not in qc and not qc.get("save_errors")
+            else "partial_success"
+        )
         return saved_products, qc
     except Exception as e:
         logger.error(
@@ -318,7 +353,9 @@ def stack_images_multi(image_paths: List[str], output_dir: str, params: Dict) ->
 def stack_images(image_paths: List[str], output_dir: str, params: Dict) -> Tuple[Optional[str], Dict]:
     """Legacy API wrapper returning only the robust FITS path and QC."""
     products, qc = stack_images_multi(image_paths, output_dir, params)
-    if qc.get("error") or not products.get("robust", {}).get("fits"):
+    if qc.get("error") or (
+        not products.get("robust", {}).get("fits")
+    ):
         if not qc.get("error"):
             qc["error"] = "Robust FITS output missing after stacking."
         logger.error(

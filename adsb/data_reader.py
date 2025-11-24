@@ -1,4 +1,4 @@
-#data_reader.py
+# data_reader.py
 """
 Module for reading and parsing aircraft.json from dump1090.
 """
@@ -74,9 +74,9 @@ def read_aircraft_data() -> dict:
             seen_pos = _to_float(ac.get('seen_pos'))
             seen = _to_float(ac.get('seen'))
             age = None
-            if seen_pos is not None and seen_pos >= 0:
+            if (seen_pos is not None) and (seen_pos >= 0):
                  age = seen_pos
-            elif seen is not None and seen >= 0:
+            elif (seen is not None) and (seen >= 0):
                  age = seen
 
             # Check age validity against MAX_AIRCRAFT_STALENESS_S
@@ -103,7 +103,8 @@ def read_aircraft_data() -> dict:
             # If both are None, 'alt' remains None
             # --- END ALTITUDE FALLBACK ---
 
-            vr = _to_float(ac.get('baro_rate')) or _to_float(ac.get('vert_rate')) # Fallback for vertical rate
+            vr = (_to_float(ac.get('baro_rate'))
+                  or _to_float(ac.get('vert_rate')))  # Fallback for vertical rate
             flight = str(ac.get('flight') or '').strip()
 
 
@@ -142,8 +143,8 @@ def read_aircraft_data() -> dict:
         logger.warning(f"Warning: ADS-B file not found: {file_path}")
         return {}
     except json.JSONDecodeError as e:
-         logger.error(f"ERROR: Failed to decode JSON from {file_path}: {e}")
-         return {} # Return empty on decode error after retry
+        logger.error(f"ERROR: Failed to decode JSON from {file_path}: {e}")
+        return {}  # Return empty on decode error after retry
     except Exception as e:
         logger.error(f"ERROR: Unexpected error in read_aircraft_data: {e}")
         # Optionally re-raise or log traceback here

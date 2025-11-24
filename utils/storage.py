@@ -30,7 +30,9 @@ def rel_to_logs_url(path: str) -> Optional[str]:
     try:
         abs_path = os.path.abspath(path)
         abs_root = os.path.abspath(LOG_DIR)
-        if os.path.commonpath([abs_path, abs_root]) != abs_root:
+        if (
+            os.path.commonpath([abs_path, abs_root]) != abs_root
+        ):
             return None
         rel = os.path.relpath(abs_path, abs_root).replace(os.sep, "/")
         return f"/logs/{rel}"
@@ -121,7 +123,10 @@ def _should_rotate(file_path: str, new_records: Iterable[Dict[str, Any]], thresh
         records_list = list(new_records)
         # Add estimate for list brackets and commas
         added_bytes_estimate = len(json.dumps(
-            records_list, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))
+            records_list,
+            ensure_ascii=False,
+            separators=(',', ':')
+        ).encode('utf-8'))
     except Exception:
         # Fallback to a reasonable estimate if serialization fails
         added_bytes_estimate = 2048 * \
@@ -132,7 +137,11 @@ def _should_rotate(file_path: str, new_records: Iterable[Dict[str, Any]], thresh
 
 
 def append_to_json(datas: List[Dict[str, Any]], file_path: str):
-    """Appends records to a JSON log file atomically, with pre-emptive rotation."""
+    """
+    Appends records to a JSON log file atomically, with pre-emptive rotation.
+    Thread-safe via per-file locks; writes go through a temp file + rename and will rotate
+    before exceeding the configured size.
+    """
     # Ensure datas is a list and not empty
     if not isinstance(datas, list) or not datas or not all(isinstance(x, dict) for x in datas):
         return
@@ -171,14 +180,18 @@ def append_to_json(datas: List[Dict[str, Any]], file_path: str):
         base_name = os.path.basename(file_path)
         # Use simpler temp file naming convention if needed
         tmp_path = os.path.join(
-            dir_path, f".{base_name}.{os.getpid()}.{int(time.time_ns())}.tmp")
+            dir_path,
+            f".{base_name}.{os.getpid()}.{int(time.time_ns())}.tmp"
+        )
 
         try:
             # Write the updated object to the temporary file
             with open(tmp_path, 'w', encoding='utf-8') as f:
                 # Use compact separators for potentially smaller file size? Indent=2 is more readable.
-                json.dump(log_object, f, indent=2,
-                          ensure_ascii=False, allow_nan=False)
+                json.dump(
+                    log_object, f, indent=2,
+                    ensure_ascii=False, allow_nan=False
+                )
                 # Ensure data is written to OS buffer
                 f.flush()
                 # Ensure data is written physically to disk

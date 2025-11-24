@@ -51,7 +51,8 @@ def _ensure_executor() -> None:
                 stacking_cfg = CONFIG.get('stacking', {})
                 max_workers = int(stacking_cfg.get('num_workers', 1))
                 # Ensure at least one worker
-                _executor = ThreadPoolExecutor(max_workers=max(1, max_workers))
+                _executor = ThreadPoolExecutor(
+                    max_workers=max(1, max_workers))
 
 
 def schedule_stack_and_publish(sequence_id: str, image_paths: List[str], capture_meta: Dict) -> None:
@@ -60,6 +61,8 @@ def schedule_stack_and_publish(sequence_id: str, image_paths: List[str], capture
 
     If stacking is disabled or no images are provided, the function
     returns immediately.
+    Honors the global shutdown flag: once shutdown is requested, new tasks are not accepted,
+    but previously submitted tasks will still run to completion unless the executor was torn down.
     """
     # Do not schedule new jobs if stacking is disabled or shutdown has been requested
     if not CONFIG.get('stacking', {}).get('enabled', False):
@@ -127,13 +130,21 @@ def _run_stacking_pipeline(sequence_id: str, image_paths: List[str], capture_met
             "stack_params_used": params,
             "qc": qc,
             "outputs": {
-                "master_fits": rel_to_logs_url(master_fits) if master_fits else None,
-                "sequence_mean_png": rel_to_logs_url(os.path.join(out_dir, "stack_mean.png")),
-                "sequence_robust_png": rel_to_logs_url(os.path.join(out_dir, "stack_robust.png")),
-                "sequence_anomaly_png": rel_to_logs_url(os.path.join(out_dir, "stack_anomaly.png")),
-                "sequence_mean_fits": rel_to_logs_url(os.path.join(out_dir, "stack_mean.fits")),
-                "sequence_robust_fits": rel_to_logs_url(os.path.join(out_dir, "stack_robust.fits")),
-                "sequence_anomaly_fits": rel_to_logs_url(os.path.join(out_dir, "stack_anomaly.fits")),
+                "master_fits": (
+                    rel_to_logs_url(master_fits) if master_fits else None
+                ),
+                "sequence_mean_png": rel_to_logs_url(
+                    os.path.join(out_dir, "stack_mean.png")),
+                "sequence_robust_png": rel_to_logs_url(
+                    os.path.join(out_dir, "stack_robust.png")),
+                "sequence_anomaly_png": rel_to_logs_url(
+                    os.path.join(out_dir, "stack_anomaly.png")),
+                "sequence_mean_fits": rel_to_logs_url(
+                    os.path.join(out_dir, "stack_mean.fits")),
+                "sequence_robust_fits": rel_to_logs_url(
+                    os.path.join(out_dir, "stack_robust.fits")),
+                "sequence_anomaly_fits": rel_to_logs_url(
+                    os.path.join(out_dir, "stack_anomaly.fits")),
             },
             "timestamp": int(time.time())
         }
@@ -146,7 +157,10 @@ def _run_stacking_pipeline(sequence_id: str, image_paths: List[str], capture_met
 
 
 def shutdown() -> None:
-    """Shuts down the background executor, waiting for all queued tasks to finish."""
+    """
+    Shuts down the background executor, waiting for all queued tasks to finish.
+    Also marks the orchestrator as shutdown so future submissions are rejected.
+    """
     global _executor, _shutdown_requested
     # Mark that no new jobs should be accepted
     _shutdown_requested = True

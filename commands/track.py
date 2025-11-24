@@ -23,7 +23,10 @@ class TrackCommand(Command):
 
         with self.context.track_lock:
             # Cancel scheduler timer
-            if self.context._scheduler_timer and self.context._scheduler_timer.is_alive():
+            if (
+                self.context._scheduler_timer
+                and self.context._scheduler_timer.is_alive()
+            ):
                 self.context._scheduler_timer.cancel()
                 self.context._scheduler_timer = None
                 self.context.is_scheduler_waiting = False

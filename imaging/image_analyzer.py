@@ -29,7 +29,7 @@ def _load_fits_data(image_path: str) -> Optional[np.ndarray]:
         # Using memmap=False might be safer for frequent access/modification?
         with fits.open(image_path, memmap=False) as hdul:
             # Check if HDUList is valid and if the primary HDU exists
-            if not hdul or len(hdul) == 0:
+            if (not hdul) or (len(hdul) == 0):
                 logger.warning(
                     f"Warning: Invalid or empty FITS file: {image_path}.")
                 return None
@@ -68,7 +68,11 @@ def _normalize_zscale(image_data: np.ndarray) -> Optional[np.ndarray]:
             return None
         # ZScale can fail on flat images, handle this
         min_val, max_val = np.nanmin(image_data), np.nanmax(image_data)
-        if not np.isfinite(min_val) or not np.isfinite(max_val) or min_val == max_val:
+        if (
+            (not np.isfinite(min_val))
+            or (not np.isfinite(max_val))
+            or (min_val == max_val)
+        ):
             # Return a constant array if image is flat or all non-finite
             return np.zeros_like(image_data, dtype=np.float32)
 
@@ -77,8 +81,10 @@ def _normalize_zscale(image_data: np.ndarray) -> Optional[np.ndarray]:
         # Handle potential masked arrays from astropy
         if hasattr(normed_data, 'mask'):
             # Fill masked values with median of non-masked, or 0 if all masked
-            fill_val = np.ma.median(normed_data) if not np.all(
-                normed_data.mask) else 0
+            fill_val = (
+                np.ma.median(normed_data) if not np.all(normed_data.mask)
+                else 0
+            )
             normed_data = np.ma.filled(normed_data, fill_value=fill_val)
 
         # Ensure output is float32
@@ -162,10 +168,8 @@ def _estimate_exposure_adjustment_from_data(image_data: np.ndarray) -> float:
 
         if saturated_pixels_fraction > 0.10:
             adjustment = min(adjustment, 0.5)
-            # logger.info("  - Exposure Adjust: High saturation detected (>10%), reducing factor.") # Optional: less verbose
         elif saturated_pixels_fraction > 0.01:
             adjustment = min(adjustment, 0.8)
-            # logger.info("  - Exposure Adjust: Saturation detected (>1%), reducing factor slightly.")
 
         adj_min = float(capture_cfg.get('exposure_adjust_factor_min', 0.1))
         adj_max = float(capture_cfg.get('exposure_adjust_factor_max', 10.0))
@@ -217,7 +221,11 @@ def _detect_aircraft_from_data(image_data: np.ndarray, original_shape: Tuple[int
         det_cfg = CONFIG['capture']['detection']
         sharpness_min_cfg = float(det_cfg.get('sharpness_min', 10.0))
         if sharpness < sharpness_min_cfg:
-            return {'detected': False, 'reason': f'blurry (sharpness {sharpness:.1f} < {sharpness_min_cfg:.1f})', 'sharpness': sharpness}
+            return {
+                'detected': False,
+                'reason': f'blurry (sharpness {sharpness:.1f} < {sharpness_min_cfg:.1f})',
+                'sharpness': sharpness
+            }
 
         if not np.any(np.isfinite(image_data)):
             return {'detected': False, 'reason': 'all_non_finite', 'sharpness': sharpness}
@@ -232,7 +240,7 @@ def _detect_aircraft_from_data(image_data: np.ndarray, original_shape: Tuple[int
             scale = max_dim_detect / current_max_dim
             target_w = int(orig_w * scale)
             target_h = int(orig_h * scale)
-            if target_w > 0 and target_h > 0:
+            if (target_w > 0) and (target_h > 0):
                 img_8bit_scaled = cv2.resize(
                     img_8bit_detect, (target_w, target_h), interpolation=cv2.INTER_AREA)
             else:
@@ -289,7 +297,15 @@ def _detect_aircraft_from_data(image_data: np.ndarray, original_shape: Tuple[int
         threshold_area_px_cfg = float(det_cfg.get('threshold_area_px', 50.0))
         scaled_threshold = threshold_area_px_cfg * (scale * scale)
         if area < scaled_threshold:
-            return {'detected': False, 'reason': f'best_contour_too_small ({area:.1f} < {scaled_threshold:.1f} px^2)', 'area': area, 'threshold': scaled_threshold, 'sharpness': sharpness}
+            return {
+                'detected': False,
+                'reason': (
+                    f'best_contour_too_small ({area:.1f} < {scaled_threshold:.1f} px^2)'
+                ),
+                'area': area,
+                'threshold': scaled_threshold,
+                'sharpness': sharpness
+            }
 
         M = cv2.moments(best_contour)
         if M.get('m00', 0) == 0:
@@ -306,13 +322,20 @@ def _detect_aircraft_from_data(image_data: np.ndarray, original_shape: Tuple[int
 
         area_factor = np.log1p(area / scaled_threshold) / np.log1p(100)
         sharp_factor = np.log1p(sharpness / sharpness_min_cfg) / np.log1p(10)
-        confidence = 0.6 * np.clip(area_factor, 0, 1) + \
-            0.4 * np.clip(sharp_factor, 0, 1)
+        confidence = (0.6 * np.clip(area_factor, 0, 1)
+                      + 0.4 * np.clip(sharp_factor, 0, 1))
         confidence = np.clip(confidence, 0.0, 1.0)
 
         confidence_min_cfg = float(det_cfg.get('confidence_min', 0.5))
         if confidence < confidence_min_cfg:
-            return {'detected': False, 'reason': f'low_confidence ({confidence:.2f} < {confidence_min_cfg:.2f})', 'sharpness': sharpness, 'confidence': confidence}
+            return {
+                'detected': False,
+                'reason': (
+                    f'low_confidence ({confidence:.2f} < {confidence_min_cfg:.2f})'
+                ),
+                'sharpness': sharpness,
+                'confidence': confidence
+            }
 
         return {'detected': True, 'center_px': (cx_full, cy_full), 'confidence': confidence, 'sharpness': sharpness}
 
@@ -331,8 +354,9 @@ def _save_png_preview_from_data(image_data: np.ndarray, png_path: str) -> str:
     if not np.any(np.isfinite(image_data)):
         img_8bit = np.zeros(image_data.shape[:2], dtype=np.uint8)
     else:
-        img_8bit = cv2.normalize(np.nan_to_num(
-            image_data), None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+        img_8bit = cv2.normalize(
+            np.nan_to_num(image_data), None, 0, 255, cv2.NORM_MINMAX
+        ).astype(np.uint8)
     if img_8bit is None:
         return ""
 

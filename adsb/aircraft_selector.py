@@ -92,7 +92,8 @@ def calculate_expected_value(current_az_el: tuple, icao: str, aircraft_data: dic
         try:
             az, el = latlonalt_to_azel(
                 pos['est_lat'], pos['est_lon'], alt_ft, pred_time, observer_loc)
-            if not (np.isfinite(az) and np.isfinite(el)): return None
+            if (not np.isfinite(az)) or (not np.isfinite(el)):
+                return None
         except Exception:
             return None
 
@@ -162,7 +163,10 @@ def calculate_expected_value(current_az_el: tuple, icao: str, aircraft_data: dic
             frame_future
         )
         if sep_future < min_sun_sep:
-             return {'icao': icao, 'ev': 0.0, 'reason': f"future_sun_conflict (<{min_sun_sep} in {sun_lookahead}s)"}
+            return {
+                'icao': icao, 'ev': 0.0,
+                'reason': f"future_sun_conflict (<{min_sun_sep} in {sun_lookahead}s)"
+            }
     
     # Also check current sun separation just to be safe
     frame_start = AltAz(obstime=Time(state_start['time'], format='unix'), location=observer_loc)
@@ -358,13 +362,14 @@ def evaluate_manual_target_viability(
         CONFIG['observer']['longitude_deg'],
         lat, lon
     )
-    
+
     if not np.isfinite(dist_km):
         reasons.append("distance calculation failed")
     else:
         details["range_km"] = round(dist_km, 1)
         if dist_km > max_range_km:
-            reasons.append(f"outside range limit ({dist_km:.1f}km > {max_range_km:.1f}km)")
+            reasons.append(
+                f"outside range limit ({dist_km:.1f}km > {max_range_km:.1f}km)")
 
     # Check Altitude & Elevation
     alt_ft = ac.get("alt")
@@ -378,9 +383,11 @@ def evaluate_manual_target_viability(
 
         min_el_req = max(min_el_sel, min_el_hw)
         if el < min_el_req:
-            reasons.append(f"below min elevation ({el:.1f}° < {min_el_req:.1f}°)")
+            reasons.append(
+                f"below min elevation ({el:.1f}° < {min_el_req:.1f}°)")
         if el > max_el_hw:
-            reasons.append(f"above max elevation ({el:.1f}° > {max_el_hw:.1f}°)")
+            reasons.append(
+                f"above max elevation ({el:.1f}° > {max_el_hw:.1f}°)")
 
         # Sun Avoidance
         sun_az, sun_el = get_sun_azel(now, observer_loc)

@@ -33,7 +33,11 @@ logger = logging.getLogger(__name__)
 
 
 class IndiController(PyIndi.BaseClient):
-    """INDI client for mount, camera, and focuser."""
+    """
+    INDI client for mount, camera, and focuser.
+    Dry-run mode simulates hardware; real mode connects to INDI devices.
+    Camera access is serialized with a private lock to prevent overlapping exposures.
+    """
 
     def __init__(self):
         """
@@ -41,6 +45,8 @@ class IndiController(PyIndi.BaseClient):
         """
         super().__init__()  # Call BaseClient init first
         self.shutdown_event: Optional[threading.Event] = threading.Event()
+        # Serialize camera access so guide snaps and sequences cannot overlap
+        self._camera_lock = threading.Lock()
 
         # BLOB handling structures
         self._blob_lock = threading.Lock()
@@ -81,7 +87,8 @@ class IndiController(PyIndi.BaseClient):
             if not all([self.mount, self.camera, self.focuser]):
                 device_names = [d.getDeviceName() for d in self.getDevices()]
                 logger.critical(
-                    f"ERROR: One or more hardware devices not found. Available devices: {device_names}")
+                    f"ERROR: One or more hardware devices not found. "
+                    f"Available devices: {device_names}")
                 raise ValueError("One or more hardware devices not found")
 
             # Detect BLOB name only for real hardware
@@ -147,7 +154,10 @@ class IndiController(PyIndi.BaseClient):
                     ver_widget = bin_prop.findWidgetByName("VER_BIN")
                     bin_x = int(cam_specs['binning']['x'])
                     bin_y = int(cam_specs['binning']['y'])
-                    if hor_widget and ver_widget and (hor_widget.value != bin_x or ver_widget.value != bin_y):
+                    is_hor_bin_different = hor_widget and hor_widget.value != bin_x
+                    is_ver_bin_different = ver_widget and ver_widget.value != bin_y
+
+                    if is_hor_bin_different or is_ver_bin_different:
                         hor_widget.value = bin_x
                         ver_widget.value = bin_y
                         self.sendNewNumber(bin_prop)
@@ -169,7 +179,7 @@ class IndiController(PyIndi.BaseClient):
                 if offset_prop:
                     widget = offset_prop.findWidgetByName("OFFSET")
                     offset_val = float(cam_specs['offset'])
-                    if widget and abs(widget.value - offset_val) > 0.1:
+                    if widget and (abs(widget.value - offset_val) > 0.1):
                         widget.value = offset_val
                         self.sendNewNumber(offset_prop)
                         logger.info(f"  - Set Camera: Offset to {offset_val}.")
@@ -266,8 +276,10 @@ class IndiController(PyIndi.BaseClient):
         Args:
             bp: The BLOB property object from the PyIndi client.
         """
-        is_expected_blob = (bp.name == self._blob_name) or (
-            self._blob_name == "CCD1" and bp.name == "CCD1")
+        is_expected_blob = (
+            (bp.name == self._blob_name)
+            or (self._blob_name == "CCD1" and bp.name == "CCD1")
+        )
         if not is_expected_blob:
             PyIndi.BaseClient.newBLOB(self, bp)
             return
@@ -430,8 +442,11 @@ class IndiController(PyIndi.BaseClient):
         if CONFIG['development']['dry_run']:
             frame = get_altaz_frame(self.observer_loc)
             max_slew = CONFIG['hardware'].get('max_slew_deg_s', 6.0)
-            realistic_slew_time = slew_time_needed(
-                self.simulated_az_el, (az, el), max_slew, frame) if max_slew > 0 else 5.0
+            realistic_slew_time = (
+                slew_time_needed(self.simulated_az_el, (az, el), max_slew, frame)
+                if max_slew > 0
+                else 5.0
+            )
             logger.info(
                 f"[DRY RUN] Slewing from {self.simulated_az_el} to az/el: ({az:.2f}, {el:.2f})")
             steps = max(1, int(max(0.5, realistic_slew_time) / 0.5))
@@ -495,9 +510,15 @@ class IndiController(PyIndi.BaseClient):
                 (az, el), sun_az_el_future, arrival_frame)
             min_sep = float(CONFIG['selection'].get(
                 'min_sun_separation_deg', 15.0))
-            if separation_deg_future < min_sep:
+
+            is_low_elevation = el < float(CONFIG['selection'].get(
+                'min_elevation_deg', 5.0)) # Re-check here too for extra safety
+            is_too_close_to_sun = separation_deg_future < min_sep
+
+            if is_low_elevation or is_too_close_to_sun:
                 logger.warning(
-                    f"SAFETY ABORT (Predictive): Target ({az:.1f}, {el:.1f}) will be {separation_deg_future:.2f}° from Sun.")
+                    f"SAFETY ABORT (Predictive): Target ({az:.1f}, {el:.1f}) "
+                    f"will be {separation_deg_future:.2f}° from Sun.")
                 if progress_cb:
                     try:
                         progress_cb(current_az, current_el, "abort")
@@ -987,6 +1008,7 @@ class IndiController(PyIndi.BaseClient):
     def snap_image(self, label: str) -> Optional[str]:
         """
         Convenience wrapper to capture a short exposure for guiding or autofocus.
+        Uses the shared camera lock via `capture_image` and returns the FITS path or None on failure.
         """
         images_dir = os.path.join(LOG_DIR, 'images')
         path = os.path.join(images_dir, f"snap_{label}_{time.time_ns()}.fits")
@@ -1000,190 +1022,206 @@ class IndiController(PyIndi.BaseClient):
 
     # --- capture_image METHOD (Includes Dry Run uint16 fix + Text Overlay) ---
     def capture_image(self, exposure_s: float, save_path: str) -> Optional[str]:
-        """Captures a single image using the BLOB queue mechanism."""
+        """
+        Captures a single image using the BLOB queue mechanism.
+        Serialized by the camera lock; returns the saved FITS path or None on timeout/abort/error.
+        """
         try:
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
         except OSError as e:
             logger.error(f"Error creating directory for {save_path}: {e}")
             return None
+        with self._camera_lock:
+            if CONFIG['development']['dry_run']:
+                logger.info(
+                    f"[DRY RUN] Simulating capture of: {os.path.basename(save_path)}")
+                png_path = os.path.splitext(save_path)[0] + ".png"
+                h = CONFIG.get('camera_specs', {}).get('resolution_height_px', 480)
+                w = CONFIG.get('camera_specs', {}).get('resolution_width_px', 640)
 
-        if CONFIG['development']['dry_run']:
-            logger.info(
-                f"[DRY RUN] Simulating capture of: {os.path.basename(save_path)}")
-            png_path = os.path.splitext(save_path)[0] + ".png"
-            h = CONFIG.get('camera_specs', {}).get('resolution_height_px', 480)
-            w = CONFIG.get('camera_specs', {}).get('resolution_width_px', 640)
+                # 1. Create uint16 base image
+                fits_baseline_value = 1000  # Example: low background value
+                img_fits_uint16 = np.full((h, w), fits_baseline_value, np.uint16)
 
-            # 1. Create uint16 base image
-            fits_baseline_value = 1000  # Example: low background value
-            img_fits_uint16 = np.full((h, w), fits_baseline_value, np.uint16)
+                # 2. Add text overlay directly onto the uint16 image
+                text_color = 60000
+                font_scale = 0.8
+                font_thickness = 2
+                cv2.putText(img_fits_uint16, "DRY RUN", (10, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, font_scale, 
+                            text_color, font_thickness)
 
-            # 2. Add text overlay directly onto the uint16 image
-            text_color = 60000
-            font_scale = 0.8
-            font_thickness = 2
-            cv2.putText(img_fits_uint16, "DRY RUN", (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, text_color, font_thickness)
+                try:  # Add dynamic text (e.g., frame number)
+                    basename_no_ext = os.path.splitext(
+                        os.path.basename(save_path))[0]
+                    parts = basename_no_ext.split('_')
+                    # Expecting filename like '..._1_of_5'
+                    if len(parts) >= 3:
+                        dynamic_text = f"Frame: {parts[-3]} of {parts[-1]}"
+                    else:
+                        raise IndexError("Filename format not as expected")
+                except Exception:  # Fallback
+                    dynamic_text = os.path.basename(save_path)[-20:-5]
+                cv2.putText(img_fits_uint16, dynamic_text, (10, 60),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, text_color, 1)
 
-            try:  # Add dynamic text (e.g., frame number)
-                basename_no_ext = os.path.splitext(
-                    os.path.basename(save_path))[0]
-                parts = basename_no_ext.split('_')
-                # Expecting filename like '..._1_of_5'
-                if len(parts) >= 3:
-                    dynamic_text = f"Frame: {parts[-3]} of {parts[-1]}"
-                else:
-                    raise IndexError("Filename format not as expected")
-            except Exception:  # Fallback
-                dynamic_text = os.path.basename(save_path)[-20:-5]
-            cv2.putText(img_fits_uint16, dynamic_text, (10, 60),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, text_color, 1)
-
-            # 3. Save the uint16 array (flat background + text) as FITS
-            hdu = fits.PrimaryHDU(img_fits_uint16)
-            hdu.header['EXPTIME'] = (float(exposure_s), 'Exposure time (s)')
-            hdu.header['DATE-OBS'] = time.strftime(
-                '%Y-%m-%dT%H:%M:%S', time.gmtime())
-            try:
-                fits.HDUList([hdu]).writeto(
-                    save_path, overwrite=True, checksum=True)
-            except Exception as e:
-                logger.error(
-                    f"[DRY RUN] Failed to write dummy FITS {save_path}: {e}")
-                return None
-
-            # 4. Generate PNG preview from the uint16 array (with text)
-            try:
-                img_preview_8bit = cv2.normalize(
-                    img_fits_uint16, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
-                cv2.imwrite(png_path, img_preview_8bit)
-            except Exception as e:
-                logger.error(
-                    f"[DRY RUN] Failed to write dummy PNG {png_path}: {e}")
-
-            return save_path
-
-        # --- Real Capture Logic ---
-        min_exp = float(CONFIG['capture'].get('exposure_min_s', 0.001))
-        max_exp = float(CONFIG['capture'].get('exposure_max_s', 10.0))
-        clamped_exp = max(min_exp, min(max_exp, exposure_s))
-        if abs(clamped_exp - exposure_s) > 1e-6:
-            logger.warning(
-                f"  - Warning: Exposure {exposure_s:.4f}s clamped to {clamped_exp:.4f}s.")
-        exposure_s = clamped_exp
-        exp_prop = self._wait_number(self.camera, "CCD_EXPOSURE")
-        if not exp_prop:
-            logger.error("ERROR: CCD_EXPOSURE property not found.")
-            return None
-        exp_widget = exp_prop.findWidgetByName("CCD_EXPOSURE_VALUE")
-        if not exp_widget:
-            logger.error("ERROR: CCD_EXPOSURE_VALUE widget not found.")
-            return None
-        exposure_token = time.time_ns()
-        received_data = None
-        with self._blob_lock:
-            self._exposure_queue.put(exposure_token)
-            self._received_blobs.pop(exposure_token, None)
-        try:  # Start exposure and wait for BLOB
-            exp_widget.value = exposure_s
-            self.sendNewNumber(exp_prop)
-            cmd_timeout = time.time() + max(5.0, exposure_s + 2.0)
-            prop_state = PyIndi.IPS_BUSY
-            while prop_state == PyIndi.IPS_BUSY and time.time() < cmd_timeout:  # Wait for command accept
-                if self.shutdown_event and self.shutdown_event.is_set():
-                    raise IOError("Capture aborted (shutdown)")
-                time.sleep(0.05)
-                prop = self.camera.getNumber("CCD_EXPOSURE")
-                prop_state = prop.s if prop else PyIndi.IPS_ALERT
-            if prop_state == PyIndi.IPS_ALERT:
-                raise IOError("Exposure command failed (Alert)")
-            if prop_state == PyIndi.IPS_BUSY:
-                raise IOError("Exposure command timed out")
-            blob_timeout_time = time.time() + max(15.0, exposure_s * 2.0 + 10.0)
-            while time.time() < blob_timeout_time:  # Wait for BLOB arrival
-                if self.shutdown_event and self.shutdown_event.is_set():
-                    raise IOError(
-                        "Capture aborted (shutdown waiting for BLOB)")
-                with self._blob_lock:
-                    if exposure_token in self._received_blobs:
-                        received_data = self._received_blobs.pop(
-                            exposure_token)
-                        break
-                time.sleep(0.1)
-            else:
-                raise IOError(
-                    f"Timeout waiting for BLOB ({exposure_s:.3f}s exposure)")
-        except Exception as e:
-            logger.error(
-                f"ERROR during capture for token {exposure_token}: {e}")
-            with self._blob_lock:
-                self._received_blobs.pop(exposure_token, None)
-            return None
-        if received_data:  # Save data
-            try:
-                with open(save_path, 'wb') as f:
-                    f.write(received_data)
-                try:  # Annotate FITS
-                    with fits.open(save_path, mode="update", output_verify='silentfix') as hdul:
-                        if hdul and hdul[0].header is not None:
-                            hdr = hdul[0].header
-                            hdr['EXPTIME'] = (float(exposure_s), 's')
-                            hdr['DATE-OBS'] = Time.now().utc.isot
-                            if self.camera:
-                                binning_prop = self.camera.getNumber(
-                                    "CCD_BINNING")
-                                if binning_prop:
-                                    x_widget = binning_prop.findWidgetByName(
-                                        "HOR_BIN")
-                                    y_widget = binning_prop.findWidgetByName(
-                                        "VER_BIN")
-                                    if x_widget and y_widget:
-                                        hdr['XBINNING'] = int(x_widget.value)
-                                        hdr['YBINNING'] = int(y_widget.value)
-
-                                gain_prop = self.camera.getNumber("CCD_GAIN")
-                                if gain_prop:
-                                    gain_widget = gain_prop.findWidgetByName(
-                                        "GAIN")
-                                    if gain_widget:
-                                        hdr['GAIN'] = float(gain_widget.value)
-
-                                offset_prop = self.camera.getNumber(
-                                    "CCD_OFFSET")
-                                if offset_prop:
-                                    offset_widget = offset_prop.findWidgetByName(
-                                        "OFFSET")
-                                    if offset_widget:
-                                        hdr['OFFSET'] = float(
-                                            offset_widget.value)
-
-                                temp_prop = self.camera.getNumber(
-                                    "CCD_TEMPERATURE")
-                                if temp_prop:
-                                    temp_widget = temp_prop.findWidgetByName(
-                                        "CCD_TEMPERATURE_VALUE")
-                                    if temp_widget:
-                                        hdr['CCD-TEMP'] = float(
-                                            temp_widget.value)
-                            hdul.flush(output_verify='silentfix')
-                except Exception as e:
-                    logger.warning(f"Warning: FITS annotation failed: {e}")
+                # 3. Save the uint16 array (flat background + text) as FITS
+                hdu = fits.PrimaryHDU(img_fits_uint16)
+                hdu.header['EXPTIME'] = (float(exposure_s), 'Exposure time (s)')
+                hdu.header['DATE-OBS'] = time.strftime(
+                    '%Y-%m-%dT%H:%M:%S', time.gmtime())
                 try:
-                    save_png_preview(save_path)  # Generate PNG
+                    fits.HDUList([hdu]).writeto(
+                        save_path, overwrite=True, checksum=True)
                 except Exception as e:
-                    logger.warning(f"Warning: PNG preview failed: {e}")
+                    logger.error(
+                        f"[DRY RUN] Failed to write dummy FITS {save_path}: {e}")
+                    return None
+
+                # 4. Generate PNG preview from the uint16 array (with text)
+                try:
+                    img_preview_8bit = cv2.normalize(
+                        img_fits_uint16, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+                    cv2.imwrite(png_path, img_preview_8bit)
+                except Exception as e:
+                    logger.error(
+                        f"[DRY RUN] Failed to write dummy PNG {png_path}: {e}")
+
                 return save_path
-            except Exception as e:
-                logger.error(f"Error saving BLOB data: {e}")
+
+            # --- Real Capture Logic ---
+            min_exp = float(CONFIG['capture'].get('exposure_min_s', 0.001))
+            max_exp = float(CONFIG['capture'].get('exposure_max_s', 10.0))
+            clamped_exp = max(min_exp, min(max_exp, exposure_s))
+            if abs(clamped_exp - exposure_s) > 1e-6:
+                logger.warning(
+                    f"  - Warning: Exposure {exposure_s:.4f}s clamped to {clamped_exp:.4f}s.")
+            exposure_s = clamped_exp
+            exp_prop = self._wait_number(self.camera, "CCD_EXPOSURE")
+            if not exp_prop:
+                logger.error("ERROR: CCD_EXPOSURE property not found.")
                 return None
-        else:
-            logger.error(
-                f"Error: No BLOB data received for token {exposure_token}.")
-            return None
+            exp_widget = exp_prop.findWidgetByName("CCD_EXPOSURE_VALUE")
+            if not exp_widget:
+                logger.error("ERROR: CCD_EXPOSURE_VALUE widget not found.")
+                return None
+            exposure_token = time.time_ns()
+            received_data = None
+            with self._blob_lock:
+                self._exposure_queue.put(exposure_token)
+                self._received_blobs.pop(exposure_token, None)
+            try:  # Start exposure and wait for BLOB
+                exp_widget.value = exposure_s
+                self.sendNewNumber(exp_prop)
+                cmd_timeout = time.time() + max(5.0, exposure_s + 2.0)
+                prop_state = PyIndi.IPS_BUSY
+                while prop_state == PyIndi.IPS_BUSY and time.time() < cmd_timeout:  # Wait for command accept
+                    if self.shutdown_event and self.shutdown_event.is_set():
+                        raise IOError("Capture aborted (shutdown)")
+                    time.sleep(0.05)
+                    prop = self.camera.getNumber("CCD_EXPOSURE")
+                    prop_state = prop.s if prop else PyIndi.IPS_ALERT
+                if prop_state == PyIndi.IPS_ALERT:
+                    raise IOError("Exposure command failed (Alert)")
+                if prop_state == PyIndi.IPS_BUSY:
+                    raise IOError("Exposure command timed out")
+                blob_timeout_time = time.time() + max(15.0, exposure_s * 2.0 + 10.0)
+                while time.time() < blob_timeout_time:  # Wait for BLOB arrival
+                    if self.shutdown_event and self.shutdown_event.is_set():
+                        raise IOError(
+                            "Capture aborted (shutdown waiting for BLOB)")
+                    with self._blob_lock:
+                        if exposure_token in self._received_blobs:
+                            received_data = self._received_blobs.pop(
+                                exposure_token)
+                            break
+                    time.sleep(0.1)
+                else:
+                    raise IOError(
+                        f"Timeout waiting for BLOB ({exposure_s:.3f}s exposure)")
+            except Exception as e:
+                logger.error(
+                    f"ERROR during capture for token {exposure_token}: {e}")
+                return None
+            finally:
+                # Always scrub token bookkeeping so a timeout/abort cannot poison later captures
+                with self._blob_lock:
+                    self._received_blobs.pop(exposure_token, None)
+                try:
+                    with self._exposure_queue.mutex:
+                        try:
+                            self._exposure_queue.queue.remove(exposure_token)
+                        except ValueError:
+                            pass
+                except Exception:
+                    # Swallow cleanup errors; they are non-fatal and should not mask capture results
+                    pass
+            if received_data:  # Save data
+                try:
+                    with open(save_path, 'wb') as f:
+                        f.write(received_data)
+                    try:  # Annotate FITS
+                        with fits.open(save_path, mode="update", output_verify='silentfix') as hdul:
+                            if hdul and hdul[0].header is not None:
+                                hdr = hdul[0].header
+                                hdr['EXPTIME'] = (float(exposure_s), 's')
+                                hdr['DATE-OBS'] = Time.now().utc.isot
+                                if self.camera:
+                                    binning_prop = self.camera.getNumber(
+                                        "CCD_BINNING")
+                                    if binning_prop:
+                                        x_widget = binning_prop.findWidgetByName(
+                                            "HOR_BIN")
+                                        y_widget = binning_prop.findWidgetByName(
+                                            "VER_BIN")
+                                        if x_widget and y_widget:
+                                            hdr['XBINNING'] = int(x_widget.value)
+                                            hdr['YBINNING'] = int(y_widget.value)
+
+                                    gain_prop = self.camera.getNumber("CCD_GAIN")
+                                    if gain_prop:
+                                        gain_widget = gain_prop.findWidgetByName(
+                                            "GAIN")
+                                        if gain_widget:
+                                            hdr['GAIN'] = float(gain_widget.value)
+
+                                    offset_prop = self.camera.getNumber(
+                                        "CCD_OFFSET")
+                                    if offset_prop:
+                                        offset_widget = offset_prop.findWidgetByName(
+                                            "OFFSET")
+                                        if offset_widget:
+                                            hdr['OFFSET'] = float(
+                                                offset_widget.value)
+
+                                    temp_prop = self.camera.getNumber(
+                                        "CCD_TEMPERATURE")
+                                    if temp_prop:
+                                        temp_widget = temp_prop.findWidgetByName(
+                                            "CCD_TEMPERATURE_VALUE")
+                                        if temp_widget:
+                                            hdr['CCD-TEMP'] = float(
+                                                temp_widget.value)
+                                hdul.flush(output_verify='silentfix')
+                    except Exception as e:
+                        logger.warning(f"Warning: FITS annotation failed: {e}")
+                    try:
+                        save_png_preview(save_path)  # Generate PNG
+                    except Exception as e:
+                        logger.warning(f"Warning: PNG preview failed: {e}")
+                    return save_path
+                except Exception as e:
+                    logger.error(f"Error saving BLOB data: {e}")
+                    return None
+            else:
+                logger.error(
+                    f"Error: No BLOB data received for token {exposure_token}.")
+                return None
 
     def capture_sequence(self, icao: str, exposure_s: float, num_images: Optional[int] = None) -> List[str]:
         """
         Captures a sequence of images, schedules them for stacking, and returns the paths.
+        Runs frames sequentially under the camera lock; returns only successfully captured file paths.
         """
         if num_images is None:
             num_images = int(CONFIG['capture'].get('num_sequence_images', 5))

@@ -14,8 +14,8 @@ def _finite_or(default: float, *vals) -> float:
     """Return the first finite value from vals, else default."""
     for v in vals:
         try:
-                    if math.isfinite(float(v)):
-                        return float(v)
+            if math.isfinite(float(v)):
+                return float(v)
         except (TypeError, ValueError):
             pass
     return float(default) if default is not None else None
@@ -37,16 +37,19 @@ def _predict(start_lat, start_lon, start_alt, gs_kts, track_deg, vert_rate_fpm, 
     FPM_TO_FTPS = 1.0 / 60.0
 
     # Distance traveled (km)
-    distance_km = (gs_kts * KTS_TO_KMH) * (delta_seconds / 3600.0)
+    distance_km = (gs_kts * KTS_TO_KMH) * \
+                  (delta_seconds / 3600.0)
 
     # Great-circle destination
     start_point = Point(latitude=start_lat, longitude=start_lon)
     bearing = track_deg % 360.0
-    destination = geodesic(kilometers=distance_km).destination(start_point, bearing=bearing)
+    destination = geodesic(kilometers=distance_km).destination(
+        start_point, bearing=bearing)
 
     # Altitude (ft); treat non-finite vert_rate as 0
     vr_fpm = _finite_or(0.0, vert_rate_fpm)
-    altitude_change_ft = (vr_fpm * FPM_TO_FTPS) * delta_seconds
+    altitude_change_ft = (vr_fpm * FPM_TO_FTPS) * \
+                           delta_seconds
     new_altitude_ft = start_alt + altitude_change_ft
 
     return {

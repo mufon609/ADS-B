@@ -4,9 +4,6 @@ FastAPI web server for the real-time dashboard.
 This version implements a high-performance WebSocket push architecture, 
 mtime-based caching, and background scanning to minimize file I/O and latency.
 """
-from utils.logger_config import setup_logging
-from config_loader import CONFIG, LOG_DIR
-
 import asyncio
 import json
 import logging
@@ -15,6 +12,9 @@ import sys
 import tempfile
 import time
 from typing import Dict, List, Optional, Tuple
+
+from utils.logger_config import setup_logging
+from config_loader import CONFIG, LOG_DIR
 
 import uvicorn
 from fastapi import FastAPI, Form, Request, WebSocket, WebSocketDisconnect, HTTPException
@@ -54,6 +54,7 @@ _STACK_CACHE = {"latest": None, "recent_icao": {}, "timestamp": 0.0}
 
 # --- WebSocket Connection Manager ---
 class ConnectionManager:
+    """Tracks active WebSocket clients and broadcasts status updates to them."""
     def __init__(self):
         self.active_connections: List[WebSocket] = []
 
@@ -82,7 +83,8 @@ class ConnectionManager:
         
         for i, result in enumerate(results):
             if isinstance(result, Exception):
-                logger.warning(f"WebSocket send failed (client disconnect/error): {result}")
+                logger.warning(
+                    f"WebSocket send failed (client disconnect/error): {result}")
                 try:
                     # Remove the failed connection
                     self.active_connections.remove(connections_to_check[i])
@@ -229,7 +231,8 @@ def _scan_stack_root() -> Dict:
                 if mt > newest_mt:
                     newest_mt = mt
                     # Read manifest for the absolute latest stack
-                    manifest = _safe_read_json(os.path.join(seq_dir, "manifest.json"))
+                    manifest = _safe_read_json(
+                        os.path.join(seq_dir, "manifest.json"))
                     latest_seq_data = {
                         "icao": icao,
                         "sequence_id": seq_id,
@@ -287,7 +290,10 @@ async def status_poller_task():
             if status_data is not None:
                 # Check if the file itself is newer OR if the guide image changed (mtime differs)
                 is_file_newer = current_mtime > _STATUS_CACHE['mtime']
-                is_guide_newer = status_data.get('last_guide_mtime') != _STATUS_CACHE['data'].get('last_guide_mtime')
+                is_guide_newer = (
+                    status_data.get('last_guide_mtime')
+                    != _STATUS_CACHE['data'].get('last_guide_mtime')
+                )
 
                 if is_file_newer or is_guide_newer:
                     # Update cache
@@ -297,7 +303,10 @@ async def status_poller_task():
                     # Broadcast the update instantly via WebSocket
                     await manager.broadcast(status_data)
                 
-            elif _STATUS_CACHE['data'].get("error") != "status_file_missing" and current_mtime is None:
+            elif (
+                _STATUS_CACHE['data'].get("error") != "status_file_missing"
+                and current_mtime is None
+            ):
                 # Handle error state (file missing or stat error)
                 logger.warning("Status file disappeared or could not be read; broadcasting error state.")
                 error_state = {"mode": "error", "error": "status_file_missing"}
@@ -347,7 +356,10 @@ async def health_check():
     current_time = time.time()
     
     # If the cache hasn't been updated in 30 seconds, something is wrong with the poller/main app
-    if (current_time - last_update_mtime) > 30.0 and last_update_mtime != 0:
+    if (
+        (current_time - last_update_mtime) > 30.0
+        and last_update_mtime != 0
+    ):
         raise HTTPException(status_code=503, detail="Status cache is stale (poller failure or main app frozen).")
     
     if _STATUS_CACHE['data'].get('error') == 'status_file_missing':
@@ -474,13 +486,19 @@ async def api_recent_stacks(icao: str, limit: int = 5):
 
     if not recent_stacks:
         return JSONResponse(
-            content={"icao": icao_clean, "items": [],
-                     "message": "no_sequences_for_icao"},
+            content={
+                "icao": icao_clean,
+                "items": [],
+                "message": "no_sequences_for_icao"
+            },
             headers={"Cache-Control": "no-store"},
             status_code=404,
         )
     
-    return JSONResponse(content={"icao": icao_clean, "items": recent_stacks[:limit]}, headers={"Cache-Control": "no-store"})
+    return JSONResponse(
+        content={"icao": icao_clean, "items": recent_stacks[:limit]},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/api/stack/sequence/{icao}/{sequence_id}")
@@ -499,7 +517,11 @@ async def api_sequence_manifest(icao: str, sequence_id: str):
         STACK_ROOT, icao_clean, sequence_id_clean))
 
     # Security check: path must be within STACK_ROOT
-    if os.path.commonpath([seq_dir, os.path.abspath(STACK_ROOT)]) != os.path.abspath(STACK_ROOT):
+    is_path_safe = (
+        os.path.commonpath([seq_dir, os.path.abspath(STACK_ROOT)])
+        == os.path.abspath(STACK_ROOT)
+    )
+    if not is_path_safe:
         return JSONResponse(
             content={"error": "forbidden", "message": "Invalid path specified."},
             status_code=403,
@@ -522,7 +544,10 @@ async def api_sequence_manifest(icao: str, sequence_id: str):
 
     if not manifest:
         return JSONResponse(
-            content={"error": "not_found", "message": f"Sequence manifest not found: {manifest_path}"},
+            content={
+                "error": "not_found",
+                "message": f"Sequence manifest not found: {manifest_path}"
+            },
             headers={"Cache-Control": "no-store"},
             status_code=404,
         )
