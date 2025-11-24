@@ -4,7 +4,7 @@ FastAPI web server for the real-time dashboard.
 This version implements a high-performance WebSocket push architecture, 
 mtime-based caching, and background scanning to minimize file I/O and latency.
 """
-from logger_config import setup_logging
+from utils.logger_config import setup_logging
 from config_loader import CONFIG, LOG_DIR
 
 import asyncio
@@ -19,7 +19,7 @@ from typing import Dict, List, Optional, Tuple
 import uvicorn
 from fastapi import FastAPI, Form, Request, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from storage import rel_to_logs_url
+from utils.storage import rel_to_logs_url
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 

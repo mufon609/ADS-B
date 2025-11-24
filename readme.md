@@ -23,7 +23,7 @@ cd ADS-B
 pip install -r requirements.txt
 
 # Terminal 1 – simulated ADS-B feed
-python fake_dump1090_1hz.py --out data/aircraft.json &
+python fake_dump1090_1hz.py --out logs/aircraft.json &
 
 # Terminal 2 – main tracker (dry_run: true by default)
 python main.py &
@@ -77,7 +77,7 @@ camera_specs:
   target_temperature: -10
 
 adsb:
-  json_file_path: "data/aircraft.json"
+  json_file_path: "logs/aircraft.json"
 
 selection:
   min_elevation_deg: 8
@@ -113,7 +113,7 @@ development:
 
 ## Production Workflow
 ```bash
-# 1. ADS-B feed → data/aircraft.json (real or fake_dump1090_1hz.py)
+# 1. ADS-B feed → logs/aircraft.json (real or fake_dump1090_1hz.py)
 # 2. python main.py &
 # 3. uvicorn dashboard.server:app --reload --port 8000
 ```
@@ -136,18 +136,24 @@ development:
 .
 ├── main.py                  # State machine & thread orchestration
 ├── config.yaml              # Full configuration
-├── aircraft_selector.py     # EV scoring & filtering
+├── adsb/
+│   ├── aircraft_selector.py # EV scoring & filtering
+│   ├── data_reader.py       # ADS-B ingestion + sanitization
+│   └── dead_reckoning.py    # Position prediction / extrapolation
 ├── hardware_control.py      # INDI client wrapper
-├── image_analyzer.py        # Blob detection, sharpness, exposure estimation
-├── stacker.py               # Alignment + sigma-clipped stacking
-├── stack_orchestrator.py    # Background job queue
+├── imaging/
+│   ├── image_analyzer.py    # Blob detection, sharpness, exposure estimation
+│   ├── stacker.py           # Alignment + sigma-clipped stacking
+│   └── stack_orchestrator.py# Background job queue
+├── utils/
+│   ├── logger_config.py     # Logging setup
+│   ├── status_writer.py     # Status JSON writer
+│   └── storage.py           # JSON append/URL helpers
+├── tools/                   # Calib, simulator, cleanup, tests
 ├── coord_utils.py           # All astrometry / coordinate math
-├── calibrate_camera.py      # ASTAP plate solving
-├── evaluator.py             # Post-session prediction error analysis
-├── fake_dump1090_1hz.py     # ADS-B simulator
 ├── dashboard/
 │   └── server.py + templates
-└── data/
+└── logs/
     └── aircraft.json        # Hot file for ADS-B updates
 ```
 

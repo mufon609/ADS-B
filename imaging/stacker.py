@@ -30,7 +30,7 @@ import traceback
 from astropy.io import fits
 from astropy.stats import sigma_clipped_stats
 
-from image_analyzer import _detect_aircraft_from_data, _load_fits_data
+from imaging.image_analyzer import _detect_aircraft_from_data, _load_fits_data
 
 logger = logging.getLogger(__name__)
 

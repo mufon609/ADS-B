@@ -26,7 +26,7 @@ from coord_utils import (
     latlonalt_to_azel,
     solve_intercept_time,
 )
-from dead_reckoning import estimate_positions_at_times
+from adsb.dead_reckoning import estimate_positions_at_times
 
 logger = logging.getLogger(__name__)
 

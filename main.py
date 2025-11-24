@@ -8,9 +8,11 @@ import logging
 import math
 import os
 import queue
+import subprocess
 import threading
 import time
 import traceback
+import sys
 from typing import Callable, Optional
 
 import astropy.units as u
@@ -19,7 +21,7 @@ from astropy.coordinates import EarthLocation
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
-from aircraft_selector import (
+from adsb.aircraft_selector import (
     calculate_expected_value,
     evaluate_manual_target_viability,
     select_aircraft,
@@ -34,20 +36,20 @@ from coord_utils import (
     get_sun_azel,
     latlonalt_to_azel,
 )
-from data_reader import read_aircraft_data
-from dead_reckoning import estimate_positions_at_times
+from adsb.data_reader import read_aircraft_data
+from adsb.dead_reckoning import estimate_positions_at_times
 from hardware_control import IndiController
-from image_analyzer import (
+from imaging.image_analyzer import (
     _detect_aircraft_from_data,
     _estimate_exposure_adjustment_from_data,
     _load_fits_data,
     _save_png_preview_from_data,
 )
-from logger_config import setup_logging
-from stack_orchestrator import request_shutdown
-from stack_orchestrator import shutdown as shutdown_stack_orchestrator
-from status_writer import write_status
-from storage import append_to_json, ensure_log_dir
+from utils.logger_config import setup_logging
+from imaging.stack_orchestrator import request_shutdown
+from imaging.stack_orchestrator import shutdown as shutdown_stack_orchestrator
+from utils.status_writer import write_status
+from utils.storage import append_to_json, ensure_log_dir
 
 logger = logging.getLogger(__name__)
 
@@ -1304,6 +1306,21 @@ class FileHandler(FileSystemEventHandler):
 if __name__ == "__main__":
     setup_logging()
     ensure_log_dir()
+    fake_adsb_proc = None
+    if CONFIG['development'].get('dry_run'):
+        fake_adsb_script = os.path.join(
+            os.path.dirname(__file__), "tools", "fake_dump1090_1hz.py")
+        out_arg = CONFIG['adsb']['json_file_path']
+        try:
+            fake_adsb_proc = subprocess.Popen(
+                [sys.executable, fake_adsb_script, "--out", out_arg],
+                cwd=os.path.dirname(fake_adsb_script),
+            )
+            logger.info(
+                f"Started fake_dump1090_1hz.py (pid {fake_adsb_proc.pid}) writing to {out_arg}")
+        except Exception as e:
+            logger.error(f"Failed to start fake_dump1090_1hz.py: {e}")
+
     adsb_watch_file = os.path.normpath(
         os.path.abspath(CONFIG['adsb']['json_file_path']))
     adsb_watch_path = os.path.dirname(adsb_watch_file)
@@ -1424,4 +1441,12 @@ if __name__ == "__main__":
         except RuntimeError as e:
             logger.warning(
                 f"Warning: Error during stack orchestrator shutdown: {e}")
+        if fake_adsb_proc:
+            logger.info("Stopping fake_dump1090_1hz.py...")
+            fake_adsb_proc.terminate()
+            try:
+                fake_adsb_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                logger.warning("fake_dump1090_1hz.py did not exit; killing.")
+                fake_adsb_proc.kill()
         logger.info("Program terminated.")

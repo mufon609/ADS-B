@@ -47,7 +47,7 @@ try:
     CONFIG['logging']['log_dir'] = log_dir_abs
 
     # Expand ADS-B JSON file path relative to config file
-    adsb_json_path_rel = CONFIG.get('adsb', {}).get('json_file_path', 'data/aircraft.json')
+    adsb_json_path_rel = CONFIG.get('adsb', {}).get('json_file_path', 'logs/aircraft.json')
     adsb_json_path_abs = os.path.abspath(os.path.join(os.path.dirname(CONFIG_FILE), adsb_json_path_rel))
     CONFIG['adsb']['json_file_path'] = adsb_json_path_abs
     os.makedirs(os.path.dirname(adsb_json_path_abs), exist_ok=True)

@@ -20,8 +20,8 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional
 
 from config_loader import CONFIG, LOG_DIR
-from storage import rel_to_logs_url
-from stacker import stack_images
+from utils.storage import rel_to_logs_url
+from imaging.stacker import stack_images
 
 logger = logging.getLogger(__name__)
 

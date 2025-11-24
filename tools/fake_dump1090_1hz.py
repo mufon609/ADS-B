@@ -8,7 +8,7 @@ Fake dump1090 (1 Hz, aligned to whole seconds)
 - Includes a "no position" craft to exercise estimator rejections.
 
 Usage:
-  python fake_dump1090_1hz.py --out /home/dump/Desktop/gitRepo/dump1090/public_html/data/aircraft.json
+  python fake_dump1090_1hz.py --out /home/dump/Desktop/gitRepo/dump1090/public_html/logs/aircraft.json
 """
 
 import argparse
@@ -18,7 +18,17 @@ import math
 import os
 import random
 import time
-from logger_config import setup_logging
+import sys
+from pathlib import Path
+
+# Ensure imports/config work when run from tools/ by resolving the repo root
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+# Default config path relative to repo root if env var not set
+os.environ.setdefault("ADSB_CONFIG_FILE", str(REPO_ROOT / "config.yaml"))
+
+from utils.logger_config import setup_logging
 
 logger = logging.getLogger(__name__)
 
@@ -62,13 +72,15 @@ def atomic_write(path, payload_str):
 def main():
     """Main entry point for the fake dump1090 generator."""
     ap = argparse.ArgumentParser(description="Fake dump1090 (1 Hz) aircraft.json generator")
-    ap.add_argument("--out", default="data/aircraft.json",
+    ap.add_argument("--out", default="logs/aircraft.json",
                     help="Output aircraft.json path")
     ap.add_argument("--seed", type=int, default=1337, help="RNG seed (for reproducible motion)")
     args = ap.parse_args()
 
     random.seed(args.seed)
     out_path = args.out
+    if not os.path.isabs(out_path):
+        out_path = os.path.join(str(REPO_ROOT), out_path)
     out_dir = os.path.dirname(out_path) or "."
     os.makedirs(out_dir, exist_ok=True)
 
