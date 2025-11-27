@@ -16,8 +16,8 @@ import numpy as np
 from astropy.coordinates import AltAz, EarthLocation
 from astropy.time import Time
 
-from config_loader import CONFIG
-from coord_utils import (
+from config.loader import CONFIG
+from astro.coords import (
     angular_sep_deg,
     angular_speed_deg_s,
     distance_km,
@@ -27,6 +27,7 @@ from coord_utils import (
     solve_intercept_time,
 )
 from adsb.dead_reckoning import estimate_positions_at_times
+from utils.tracking_utils import is_target_viable
 
 logger = logging.getLogger(__name__)
 
@@ -43,9 +44,18 @@ def _observer_location_from_config() -> EarthLocation:
 
 def calculate_expected_value(current_az_el: tuple, icao: str, aircraft_data: dict) -> dict:
     """
-    Calculates the Expected Value (EV) of tracking an aircraft based on:
-    1. Hard Filters: Elevation, Max Range, Intercept Time, Future Sun Separation.
-    2. Weighted Score: Distance (with receding penalty), Closure Rate, Intercept Time.
+    Compute the Expected Value (EV) of tracking a single aircraft.
+
+    Args:
+        current_az_el: Tuple of the mount's current (azimuth_deg, elevation_deg).
+        icao: Aircraft ICAO hex string (mixed case accepted).
+        aircraft_data: Parsed ADS-B record for this aircraft produced by
+            ``read_aircraft_data``; must contain lat/lon/alt/gs/track/vert_rate/timestamp.
+
+    Returns:
+        Dict containing ``ev`` (float), ``icao`` (str), ``intercept_time`` (seconds),
+        ``start_state`` (az/el/range/etc at start of tracking), and ``score_details``.
+        If a hard filter fails, ``ev`` is 0.0 and ``reason`` explains the failure.
     """
     # -------------------------------------------------------------------------
     # 1. Load Configuration
@@ -55,13 +65,8 @@ def calculate_expected_value(current_az_el: tuple, icao: str, aircraft_data: dic
     sel_cfg = CONFIG['selection']
     ev_cfg = CONFIG.get('ev', {})
 
-    # Hard Filters
-    min_el = float(sel_cfg.get('min_elevation_deg', 5.0))
-    max_range_km = float(sel_cfg.get('max_range_km', 100.0))
-    min_sun_sep = float(sel_cfg.get('min_sun_separation_deg', 15.0))
-    sun_lookahead = float(sel_cfg.get('sun_check_lookahead_s', 30.0))
-    
     # Scoring Parameters
+    max_range_km = float(sel_cfg.get('max_range_km', 100.0))
     receding_penalty_pct = float(sel_cfg.get('receding_penalty_percent', 20.0))
     max_closure_rate = float(sel_cfg.get('max_closure_rate_m_s', 300.0))
     horizon_s = float(ev_cfg.get('horizon_s', 180.0))
@@ -144,39 +149,47 @@ def calculate_expected_value(current_az_el: tuple, icao: str, aircraft_data: dic
     # 5. Apply Hard Filters
     # -------------------------------------------------------------------------
     
-    # FILTER 2: Elevation (Pass/Fail)
-    if state_start['el'] < min_el:
-        return {'icao': icao, 'ev': 0.0, 'reason': f"low_elevation ({state_start['el']:.1f} < {min_el})"}
+    # Check current viability (elevation, range, sun separation)
+    frame_start = AltAz(obstime=Time(state_start['time'], format='unix'), location=observer_loc)
+    viable, reasons = is_target_viable(
+        az=state_start['az'],
+        el=state_start['el'],
+        range_km=state_start['range_km'],
+        sun_az=state_start['sun_az'],
+        sun_el=state_start['sun_el'],
+        frame=frame_start,
+    )
+    if not viable:
+        # For logging/UI, we want to return the specific reason for failure
+        return {'icao': icao, 'ev': 0.0, 'reason': reasons[0] if reasons else 'not_viable_at_start'}
 
-    # FILTER 3: Range (Pass/Fail)
-    if state_start['range_km'] > max_range_km:
-        return {'icao': icao, 'ev': 0.0, 'reason': f"out_of_range ({state_start['range_km']:.1f} > {max_range_km})"}
-
-    # FILTER 4: Future Sun Separation (Pass/Fail)
-    # Check sun separation 'sun_lookahead' seconds into the future
+    # Check future sun separation only
+    sun_lookahead = float(sel_cfg.get('sun_check_lookahead_s', 30.0))
     state_future = predictor(track_start_rel + sun_lookahead)
     if state_future:
         frame_future = AltAz(obstime=Time(state_future['time'], format='unix'), location=observer_loc)
-        sep_future = angular_sep_deg(
-            (state_future['az'], state_future['el']),
-            (state_future['sun_az'], state_future['sun_el']),
-            frame_future
+        # Create a temporary list of reasons to check for sun conflict specifically
+        _, future_reasons_temp = is_target_viable(
+            az=state_future['az'],
+            el=state_future['el'],
+            range_km=state_future['range_km'],
+            sun_az=state_future['sun_az'],
+            sun_el=state_future['sun_el'],
+            frame=frame_future,
         )
-        if sep_future < min_sun_sep:
+        if "too_close_to_sun" in future_reasons_temp:
             return {
                 'icao': icao, 'ev': 0.0,
-                'reason': f"future_sun_conflict (<{min_sun_sep} in {sun_lookahead}s)"
+                'reason': f"future_sun_conflict ({state_future['az']:.1f}, {state_future['el']:.1f})"
             }
     
-    # Also check current sun separation just to be safe
-    frame_start = AltAz(obstime=Time(state_start['time'], format='unix'), location=observer_loc)
+    # Recalculate sep_start for scoring details if needed. It's safe to call angular_sep_deg here.
     sep_start = angular_sep_deg(
         (state_start['az'], state_start['el']),
         (state_start['sun_az'], state_start['sun_el']),
         frame_start
     )
-    if sep_start < min_sun_sep:
-         return {'icao': icao, 'ev': 0.0, 'reason': "current_sun_conflict"}
+
 
 
     # -------------------------------------------------------------------------
@@ -260,8 +273,15 @@ def calculate_expected_value(current_az_el: tuple, icao: str, aircraft_data: dic
 
 def select_aircraft(aircraft_dict: dict, current_mount_az_el: tuple) -> list:
     """
-    Evaluates all aircraft and returns a list sorted by Expected Value.
-    Applies a loose pre-filter to save CPU cycles before full prediction.
+    Score and rank all visible aircraft.
+
+    Args:
+        aircraft_dict: Mapping of ICAO -> aircraft data as returned by ``read_aircraft_data``.
+        current_mount_az_el: Current (azimuth_deg, elevation_deg) of the mount.
+
+    Returns:
+        List of EV result dicts (see ``calculate_expected_value``), sorted descending by EV.
+        Aircraft failing pre-filters or hard filters are omitted.
     """
     candidates = []
     
@@ -311,8 +331,18 @@ def evaluate_manual_target_viability(
     now: Optional[float] = None
 ) -> Tuple[bool, List[str], Dict[str, Any]]:
     """
-    Evaluate if a manually selected target is viable *right now* based on the new 
-    configuration limits (km range, sun separation, etc.).
+    Validate whether a manually selected aircraft can be tracked immediately.
+
+    Args:
+        icao: ICAO hex of the target to validate.
+        aircraft_dict: Latest ADS-B dataset keyed by ICAO (output of ``read_aircraft_data``).
+        observer_loc: Optional observer location; defaults to CONFIG.
+        now: Optional unix timestamp override; defaults to ``time.time()``.
+
+    Returns:
+        Tuple of (viable: bool, reasons: List[str], details: Dict[str, Any]). Reasons
+        contains human-readable failures; details echoes computed values such as range,
+        az/el, and sun separation for UI/debug surfaces.
     """
     now = now or time.time()
     if observer_loc is None:
@@ -324,12 +354,8 @@ def evaluate_manual_target_viability(
     # Load new config thresholds
     sel_cfg = CONFIG.get('selection', {})
     max_age_s = float(sel_cfg.get('manual_max_age_s', 15.0))
-    min_el_sel = float(sel_cfg.get('min_elevation_deg', 5.0))
-    min_sun_sep_deg = float(sel_cfg.get('min_sun_separation_deg', 15.0))
-    max_range_km = float(sel_cfg.get('max_range_km', 100.0))
-
+    
     hw_cfg = CONFIG.get('hardware', {})
-    min_el_hw = float(hw_cfg.get('min_el_deg', min_el_sel))
     max_el_hw = float(hw_cfg.get('max_el_deg', 90.0))
 
     # Check existence
@@ -365,11 +391,9 @@ def evaluate_manual_target_viability(
 
     if not np.isfinite(dist_km):
         reasons.append("distance calculation failed")
-    else:
-        details["range_km"] = round(dist_km, 1)
-        if dist_km > max_range_km:
-            reasons.append(
-                f"outside range limit ({dist_km:.1f}km > {max_range_km:.1f}km)")
+        return False, reasons, details # Exit early if distance calculation failed
+    
+    details["range_km"] = round(dist_km, 1)
 
     # Check Altitude & Elevation
     alt_ft = ac.get("alt")
@@ -381,26 +405,37 @@ def evaluate_manual_target_viability(
         az, el = latlonalt_to_azel(lat, lon, float(alt_ft), now, observer_loc)
         details["az_el"] = (round(az, 2), round(el, 2))
 
-        min_el_req = max(min_el_sel, min_el_hw)
-        if el < min_el_req:
-            reasons.append(
-                f"below min elevation ({el:.1f}° < {min_el_req:.1f}°)")
-        if el > max_el_hw:
-            reasons.append(
-                f"above max elevation ({el:.1f}° > {max_el_hw:.1f}°)")
-
-        # Sun Avoidance
+        # Check against general viability (min_el, max_range, min_sun_sep)
         sun_az, sun_el = get_sun_azel(now, observer_loc)
         frame_now = AltAz(obstime=Time(now, format='unix'), location=observer_loc)
-        sun_sep = angular_sep_deg((az, el), (sun_az, sun_el), frame_now)
-        details["sun_sep_deg"] = round(sun_sep, 2)
         
-        if sun_sep < min_sun_sep_deg:
-            reasons.append(f"too close to Sun ({sun_sep:.1f}° < {min_sun_sep_deg:.1f}°)")
+        viable, general_reasons = is_target_viable(
+            az=az, el=el, range_km=dist_km, sun_az=sun_az, sun_el=sun_el, frame=frame_now
+        )
+        reasons.extend(general_reasons)
+
+        # Apply max_el_hw check, which is specific to manual control
+        if el > max_el_hw:
+            reasons.append(f"above max elevation ({el:.1f}° > {max_el_hw:.1f}°)")
+
+        # Update sun_sep_deg in details, even if it was a reason for non-viability
+        if "too_close_to_sun" in general_reasons:
+             # Recalculate sun_sep for logging/details, as is_target_viable doesn't return it
+            sun_sep = angular_sep_deg((az, el), (sun_az, sun_el), frame_now)
+            details["sun_sep_deg"] = round(sun_sep, 2)
+        elif viable: # only if it's viable and not in general_reasons
+             sun_sep = angular_sep_deg((az, el), (sun_az, sun_el), frame_now)
+             details["sun_sep_deg"] = round(sun_sep, 2)
+
 
     except Exception as e:
         reasons.append(f"calculation failed: {e}")
-        return False, reasons, details
+
+    ok = len(reasons) == 0
+    details["viable"] = ok
+    details["reasons"] = reasons
+    return ok, reasons, details
+
 
     ok = len(reasons) == 0
     details["viable"] = ok

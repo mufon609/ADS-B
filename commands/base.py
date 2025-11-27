@@ -10,12 +10,19 @@ class Command(ABC):
     """Base class for all system commands."""
 
     def __init__(self, context: Any):
+        """Inject shared runtime state (scheduler, locks, hardware controller, etc.)."""
         self.context = context
 
     @abstractmethod
     def execute(self, params: Dict[str, Any]) -> bool:
         """
-        Execute the command.
-        Returns True if command completed successfully and system is in expected state.
+        Run the command with the provided parameters.
+
+        Args:
+            params: Command-specific options/flags (may be empty).
+
+        Returns:
+            True when the command completed and the system reached the intended state;
+            False otherwise.
         """
         pass

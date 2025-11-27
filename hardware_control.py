@@ -17,16 +17,16 @@ from astropy.coordinates import AltAz, EarthLocation, SkyCoord
 from astropy.io import fits
 from astropy.time import Time
 
-from config_loader import CONFIG, LOG_DIR
-from coord_utils import (
+from config.loader import CONFIG, LOG_DIR
+from astro.coords import (
     angular_sep_deg,
     distance_km,
     get_altaz_frame,
     get_sun_azel,
     slew_time_needed,
 )
-from imaging.image_analyzer import measure_sharpness, save_png_preview
-from imaging.stack_orchestrator import schedule_stack_and_publish
+from imaging.analysis import measure_sharpness, save_png_preview
+from imaging.stacking.orchestrator import schedule_stack_and_publish
 from utils.storage import append_to_json
 
 logger = logging.getLogger(__name__)
@@ -44,15 +44,26 @@ class IndiController(PyIndi.BaseClient):
         Initializes the INDI client, connects to the server, and configures devices.
         """
         super().__init__()  # Call BaseClient init first
-        self.shutdown_event: Optional[threading.Event] = threading.Event()
+        self.shutdown_handle = None  # Will be set to a StopHandle
         # Serialize camera access so guide snaps and sequences cannot overlap
         self._camera_lock = threading.Lock()
+        self._mount_lock = threading.Lock()
+        self._focuser_lock = threading.Lock()
 
         # BLOB handling structures
         self._blob_lock = threading.Lock()
         self._exposure_queue = queue.Queue()
         self._received_blobs = {}
         self._blob_name = "CCD1"  # Default
+
+        self._property_events = {}  # Store threading.Event objects for properties
+        self._property_events_lock = threading.Lock()
+
+        self._property_states = {}
+        self._property_states_lock = threading.Lock()
+
+        self._blob_events = {}
+        self._blob_events_lock = threading.Lock()
 
         is_dry_run = CONFIG['development']['dry_run']
 
@@ -203,6 +214,20 @@ class IndiController(PyIndi.BaseClient):
         )
         logger.info("--- IndiController Init Complete ---")  # Add marker
 
+    def newProperty(self, prop):
+        """
+        INDI callback executed when a new property is created or a property changes.
+        """
+        super().newProperty(prop)
+        prop_key = f"{prop.getDeviceName()}.{prop.name}"
+        with self._property_events_lock:
+            if prop_key in self._property_events:
+                self._property_events[prop_key].set()
+        
+        # Store the property state (e.g., IPS_OK, IPS_BUSY) for later retrieval
+        with self._property_states_lock:
+            self._property_states[prop_key] = prop.s
+
     # --- Helper to safely set switch states ---
 
     def _set_switch_state(self, switch_vector, widget_name, state):
@@ -220,15 +245,32 @@ class IndiController(PyIndi.BaseClient):
                 f"Warning: Widget '{widget_name}' not found in switch vector '{switch_vector.name}'.")
 
     def _wait_prop(self, get_func, dev, name, timeout=5.0):
-        """Waits for an INDI property to become available."""
+        """Waits for an INDI property to become available using a threading.Event."""
         if not dev:
             return None  # Handle case where device itself is None
+
+        prop_key = f"{dev.getDeviceName()}.{name}"
+        with self._property_events_lock:
+            if prop_key not in self._property_events:
+                self._property_events[prop_key] = threading.Event()
+            prop_event = self._property_events[prop_key]
+
+        prop_event.clear() # Clear the event before waiting
+
+        # Try to get the property immediately first
+        prop = get_func(dev, name)
+        if prop:
+            return prop
+
+        # If not immediately available, wait for the event to be set by newProperty
         t0 = time.time()
         while time.time() - t0 < timeout:
-            prop = get_func(dev, name)
-            if prop:
-                return prop
-            time.sleep(0.2)  # Longer sleep to reduce busy-waiting
+            if prop_event.wait(timeout=0.2):  # Wait for a short period
+                prop = get_func(dev, name)
+                if prop:
+                    return prop
+            # If event timed out or prop still not available, continue loop
+        
         dev_name = getattr(dev, "getDeviceName", lambda: "UNKNOWN")()
         logger.warning(
             f"Warning: Property '{name}' not available on device '{dev_name}' after {timeout}s.")
@@ -301,6 +343,10 @@ class IndiController(PyIndi.BaseClient):
             try:
                 exposure_token = self._exposure_queue.get_nowait()
                 self._received_blobs[exposure_token] = blob_data
+                # Signal the event for this exposure token
+                with self._blob_events_lock:
+                    if exposure_token in self._blob_events:
+                        self._blob_events[exposure_token].set()
             except queue.Empty:
                 logger.warning(
                     "  - Warning: Received BLOB but no exposure was pending. Discarding.")
@@ -439,61 +485,61 @@ class IndiController(PyIndi.BaseClient):
         Returns:
             True if the slew completes successfully, False otherwise.
         """
-        if CONFIG['development']['dry_run']:
-            frame = get_altaz_frame(self.observer_loc)
-            max_slew = CONFIG['hardware'].get('max_slew_deg_s', 6.0)
-            realistic_slew_time = (
-                slew_time_needed(self.simulated_az_el, (az, el), max_slew, frame)
-                if max_slew > 0
-                else 5.0
-            )
-            logger.info(
-                f"[DRY RUN] Slewing from {self.simulated_az_el} to az/el: ({az:.2f}, {el:.2f})")
-            steps = max(1, int(max(0.5, realistic_slew_time) / 0.5))
-            start_az, start_el = self.simulated_az_el
-            az_delta = ((az - start_az + 180.0) % 360.0) - 180.0
-            el_delta = el - start_el
-            for i in range(1, steps + 1):
-                if self.shutdown_event and self.shutdown_event.is_set():
+        with self._mount_lock:
+            if CONFIG['development']['dry_run']:
+                frame = get_altaz_frame(self.observer_loc)
+                max_slew = CONFIG['hardware'].get('max_slew_deg_s', 6.0)
+                realistic_slew_time = (
+                    slew_time_needed(self.simulated_az_el, (az, el), max_slew, frame)
+                    if max_slew > 0
+                    else 5.0
+                )
+                logger.info(
+                    f"[DRY RUN] Slewing from {self.simulated_az_el} to az/el: ({az:.2f}, {el:.2f})")
+                steps = max(1, int(max(0.5, realistic_slew_time) / 0.5))
+                start_az, start_el = self.simulated_az_el
+                az_delta = ((az - start_az + 180.0) % 360.0) - 180.0
+                el_delta = el - start_el
+                for i in range(1, steps + 1):
+                    if self.shutdown_handle and self.shutdown_handle.is_shutdown():
+                        if progress_cb:
+                            try:
+                                progress_cb(*self.simulated_az_el, "abort")
+                            except Exception as e:
+                                logger.warning(f"Error in slew progress_cb: {e}")
+                        logger.info("[DRY RUN] Slew aborted by shutdown.")
+                        return False
+                    f = i / steps
+                    cur_az = (start_az + f * az_delta) % 360.0
+                    cur_el = start_el + f * el_delta
+                    self.simulated_az_el = (cur_az, cur_el)
                     if progress_cb:
                         try:
-                            progress_cb(*self.simulated_az_el, "abort")
+                            progress_cb(cur_az, cur_el, "slewing")
                         except Exception as e:
                             logger.warning(f"Error in slew progress_cb: {e}")
-                    logger.info("[DRY RUN] Slew aborted by shutdown.")
-                    return False
-                f = i / steps
-                cur_az = (start_az + f * az_delta) % 360.0
-                cur_el = start_el + f * el_delta
-                self.simulated_az_el = (cur_az, cur_el)
+                    time.sleep(0.5)
+                self.simulated_az_el = (az % 360.0, el)
                 if progress_cb:
                     try:
-                        progress_cb(cur_az, cur_el, "slewing")
+                        progress_cb(
+                            self.simulated_az_el[0], self.simulated_az_el[1], "arrived")
                     except Exception as e:
                         logger.warning(f"Error in slew progress_cb: {e}")
-                time.sleep(0.5)
-            self.simulated_az_el = (az % 360.0, el)
-            if progress_cb:
-                try:
-                    progress_cb(
-                        self.simulated_az_el[0], self.simulated_az_el[1], "arrived")
-                except Exception as e:
-                    logger.warning(f"Error in slew progress_cb: {e}")
-            logger.info(
-                f"[DRY RUN] Slew complete. Mount is now at: ({az:.2f}, {el:.2f})")
-            return True
+                logger.info(
+                    f"[DRY RUN] Slew complete. Mount is now at: ({az:.2f}, {el:.2f})")
+                return True
 
-        if not self.mount:
-            logger.error("Error: Mount not connected for slew.")
-            if progress_cb:
-                try:
-                    progress_cb(0, 0, "abort")
-                except Exception as e:
-                    logger.warning(f"Error in slew progress_cb: {e}")
-            return False
-
-        az = az % 360.0
-        el = max(-5.0, min(95.0, el))
+            if not self.mount:
+                logger.error("Error: Mount not connected for slew.")
+                if progress_cb:
+                    try:
+                        progress_cb(0, 0, "abort")
+                    except Exception as e:
+                        logger.warning(f"Error in slew progress_cb: {e}")
+                return False
+            az = az % 360.0
+            el = max(-5.0, min(95.0, el))
 
         try:  # Sun safety check
             current_az, current_el = self._get_current_az_el_internal()
@@ -626,40 +672,49 @@ class IndiController(PyIndi.BaseClient):
             slew_timeout_at = time.time() + 90.0
 
         slew_finished_state = PyIndi.IPS_BUSY
-        while time.time() < slew_timeout_at:  # Polling loop
-            coord_prop = self.mount.getNumber(coord_prop_name)
-            if not coord_prop:
-                logger.warning("Warning: Mount property lost.")
-                slew_finished_state = PyIndi.IPS_ALERT
-                break
-            slew_finished_state = coord_prop.s
-            if slew_finished_state == PyIndi.IPS_BUSY:
-                try:
-                    cur_az_prog, cur_el_prog = self._get_current_az_el_internal()
-                    if progress_cb:
-                        try:
-                            progress_cb(cur_az_prog, cur_el_prog, "slewing")
-                        except Exception as e:
-                            logger.warning(f"Error in slew progress_cb: {e}")
-                except Exception as e:
-                    logger.warning(f"Error during slew progress update: {e}")
-                if self.shutdown_event and self.shutdown_event.is_set():
-                    logger.info("Slew aborted by shutdown.")
-                    if progress_cb:
-                        try:
-                            progress_cb(
-                                *self._get_current_az_el_internal(), "abort")
-                        except Exception as e:
-                            logger.warning(f"Error in slew progress_cb: {e}")
-                            progress_cb(0, 0, "abort")
-                    return False
-                time.sleep(0.5)
-                continue
-            else:
-                break  # Exit loop if not BUSY
+        prop_key = f"{self.mount.getDeviceName()}.{coord_prop_name}"
 
-        final_prop = self.mount.getNumber(coord_prop_name)  # Check final state
-        final_state = final_prop.s if final_prop else PyIndi.IPS_ALERT
+        with self._property_events_lock:
+            if prop_key not in self._property_events:
+                self._property_events[prop_key] = threading.Event()
+            prop_event = self._property_events[prop_key]
+
+        prop_event.clear() # Clear event before starting to wait
+        
+        while time.time() < slew_timeout_at:  # Loop with event wait
+            with self._property_states_lock:
+                current_prop_state = self._property_states.get(prop_key, PyIndi.IPS_BUSY)
+
+            if current_prop_state != PyIndi.IPS_BUSY:
+                slew_finished_state = current_prop_state
+                break # Exit loop if not BUSY
+
+            try:
+                cur_az_prog, cur_el_prog = self._get_current_az_el_internal()
+                if progress_cb:
+                    try:
+                        progress_cb(cur_az_prog, cur_el_prog, "slewing")
+                    except Exception as e:
+                        logger.warning(f"Error in slew progress_cb: {e}")
+            except Exception as e:
+                logger.warning(f"Error during slew progress update: {e}")
+            
+            if self.shutdown_handle and self.shutdown_handle.is_shutdown():
+                logger.info("Slew aborted by shutdown.")
+                if progress_cb:
+                    try:
+                        progress_cb(
+                            *self._get_current_az_el_internal(), "abort")
+                    except Exception as e:
+                        logger.warning(f"Error in slew progress_cb: {e}")
+                        progress_cb(0, 0, "abort")
+                return False
+
+            prop_event.wait(timeout=0.5) # Wait for event or timeout
+
+        # After the loop, get the final state
+        with self._property_states_lock:
+            final_state = self._property_states.get(prop_key, PyIndi.IPS_ALERT)
 
         if final_state == PyIndi.IPS_OK:  # SUCCESS Check
             logger.info("Slew completed successfully (IPS_OK).")
@@ -728,9 +783,10 @@ class IndiController(PyIndi.BaseClient):
             True if the autofocus routine completes successfully and finds a
             focus position above the sharpness threshold, False otherwise.
         """
-        if self.shutdown_event and self.shutdown_event.is_set():
-            logger.info("Autofocus aborted: shutdown.")
-            return False
+        with self._focuser_lock:
+            if self.shutdown_handle and self.shutdown_handle.is_shutdown():
+                logger.info("Autofocus aborted: shutdown.")
+                return False
         if CONFIG['development']['dry_run']:
             logger.info(f"[DRY RUN] Performing autofocus.")
             time.sleep(3.0)
@@ -780,33 +836,35 @@ class IndiController(PyIndi.BaseClient):
             if time.time() > routine_timeout_at:
                 logger.error("Autofocus aborted: timeout.")
                 return False
-            if self.shutdown_event and self.shutdown_event.is_set():
+            if self.shutdown_handle and self.shutdown_handle.is_shutdown():
                 logger.info("Autofocus aborted: shutdown.")
                 return False
 
             pos_widget.value = pos
             self.sendNewNumber(abs_pos_prop)
 
+            focuser_prop_key = f"{self.focuser.getDeviceName()}.ABS_FOCUS_POSITION"
+            with self._property_events_lock:
+                if focuser_prop_key not in self._property_events:
+                    self._property_events[focuser_prop_key] = threading.Event()
+                focuser_event = self._property_events[focuser_prop_key]
+            focuser_event.clear() # Clear event before waiting
+
             move_timeout_at = time.time() + 20
             move_finished_state = PyIndi.IPS_BUSY
             while time.time() < move_timeout_at:  # Wait for move
-                pos_prop = self.focuser.getNumber("ABS_FOCUS_POSITION")
-                if not pos_prop:
-                    logger.warning(
-                        f"  Warning: Focuser property lost moving to {pos}.")
-                    move_finished_state = PyIndi.IPS_ALERT
-                    break
-                move_finished_state = pos_prop.s
-                if move_finished_state == PyIndi.IPS_BUSY:
-                    if self.shutdown_event and self.shutdown_event.is_set():
-                        return False
-                    time.sleep(0.2)
-                    continue
-                else:
+                with self._property_states_lock:
+                    current_move_state = self._property_states.get(focuser_prop_key, PyIndi.IPS_BUSY)
+                
+                if current_move_state != PyIndi.IPS_BUSY:
+                    move_finished_state = current_move_state
                     break
 
-            final_prop = self.focuser.getNumber("ABS_FOCUS_POSITION")
-            final_state = final_prop.s if final_prop else PyIndi.IPS_ALERT
+                if self.shutdown_handle and self.shutdown_handle.is_shutdown():
+                    return False
+                focuser_event.wait(timeout=0.2)
+
+            final_state = move_finished_state
             if final_state != PyIndi.IPS_OK:  # Check completion
                 state_str = {PyIndi.IPS_IDLE: "IDLE", PyIndi.IPS_OK: "OK", PyIndi.IPS_BUSY: "BUSY",
                              PyIndi.IPS_ALERT: "ALERT"}.get(final_state, str(final_state))
@@ -846,26 +904,29 @@ class IndiController(PyIndi.BaseClient):
         pos_widget.value = best_pos
         self.sendNewNumber(abs_pos_prop)
 
+        focuser_prop_key = f"{self.focuser.getDeviceName()}.ABS_FOCUS_POSITION"
+        with self._property_events_lock:
+            # The event should already exist from previous moves, but ensure it's cleared
+            if focuser_prop_key not in self._property_events:
+                self._property_events[focuser_prop_key] = threading.Event()
+            focuser_event = self._property_events[focuser_prop_key]
+        focuser_event.clear() # Clear event before waiting
+
         move_timeout_at = time.time() + 20
         move_finished_state = PyIndi.IPS_BUSY
         while time.time() < move_timeout_at:  # Wait for final move
-            pos_prop = self.focuser.getNumber("ABS_FOCUS_POSITION")
-            if not pos_prop:
-                logger.warning(
-                    f"  Warning: Focuser property lost on final move.")
-                move_finished_state = PyIndi.IPS_ALERT
+            with self._property_states_lock:
+                current_move_state = self._property_states.get(focuser_prop_key, PyIndi.IPS_BUSY)
+            
+            if current_move_state != PyIndi.IPS_BUSY:
+                move_finished_state = current_move_state
                 break
-            move_finished_state = pos_prop.s
-            if move_finished_state == PyIndi.IPS_BUSY:
-                if self.shutdown_event and self.shutdown_event.is_set():
+            
+                if self.shutdown_handle and self.shutdown_handle.is_shutdown():
                     return False
-                time.sleep(0.2)
-                continue
-            else:
-                break
+            focuser_event.wait(timeout=0.2)
 
-        final_prop = self.focuser.getNumber("ABS_FOCUS_POSITION")
-        final_state = final_prop.s if final_prop else PyIndi.IPS_ALERT
+        final_state = move_finished_state
         if final_state != PyIndi.IPS_OK:
             state_str = {PyIndi.IPS_IDLE: "IDLE", PyIndi.IPS_OK: "OK", PyIndi.IPS_BUSY: "BUSY",
                          PyIndi.IPS_ALERT: "ALERT"}.get(final_state, str(final_state))
@@ -889,59 +950,65 @@ class IndiController(PyIndi.BaseClient):
             direction: The direction of the pulse ('N', 'S', 'E', or 'W').
             duration_ms: The duration of the pulse in milliseconds.
         """
-        duration_ms = max(0, int(duration_ms))
-        if direction not in ('N', 'S', 'E', 'W'):
-            logger.warning(f"Warning: Invalid guide direction '{direction}'")
-            return
-        if CONFIG['development']['dry_run']:
-            time.sleep(duration_ms / 1000.0)
-            return
-        if not self.mount:
-            logger.error("Error: Mount not connected.")
-            return
-
-        timed_prop_name, timed_widget_name = "", ""
-        if direction in ['N', 'S']:
-            timed_prop_name = "TELESCOPE_TIMED_GUIDE_NS"
-            timed_widget_name = "TIMED_GUIDE_N" if direction == 'N' else "TIMED_GUIDE_S"
-        elif direction in ['W', 'E']:
-            timed_prop_name = "TELESCOPE_TIMED_GUIDE_WE"
-            timed_widget_name = "TIMED_GUIDE_W" if direction == 'W' else "TIMED_GUIDE_E"
-
-        timed_prop = self.mount.getNumber(
-            timed_prop_name) if timed_prop_name else None
-        if timed_prop:  # Use timed command if available
-            widget = timed_prop.findWidgetByName(timed_widget_name)
-            if widget:
-                widget.value = duration_ms
-                self.sendNewNumber(timed_prop)
+        with self._mount_lock:
+            duration_ms = max(0, int(duration_ms))
+            if direction not in ('N', 'S', 'E', 'W'):
+                logger.warning(f"Warning: Invalid guide direction '{direction}'")
+                return
+            if CONFIG['development']['dry_run']:
+                time.sleep(duration_ms / 1000.0)
+                return
+            if not self.mount:
+                logger.error("Error: Mount not connected.")
                 return
 
-        prop_name, widget_name = "", ""  # Fallback to switch pulse
-        if direction in ['N', 'S']:
-            prop_name = "TELESCOPE_MOTION_NS"
-            widget_name = "MOTION_NORTH" if direction == 'N' else "MOTION_SOUTH"
-        elif direction in ['W', 'E']:
-            prop_name = "TELESCOPE_MOTION_WE"
-            widget_name = "MOTION_WEST" if direction == 'W' else "MOTION_EAST"
-        else:
-            return
+            timed_prop_name, timed_widget_name = "", ""
+            if direction in ['N', 'S']:
+                timed_prop_name = "TELESCOPE_TIMED_GUIDE_NS"
+                timed_widget_name = "TIMED_GUIDE_N" if direction == 'N' else "TIMED_GUIDE_S"
+            elif direction in ['W', 'E']:
+                timed_prop_name = "TELESCOPE_TIMED_GUIDE_WE"
+                timed_widget_name = "TIMED_GUIDE_W" if direction == 'W' else "TIMED_GUIDE_E"
 
-        prop = self.mount.getSwitch(prop_name)
-        if not prop:
-            return
-        widget = prop.findWidgetByName(widget_name)
-        if not widget:
-            return
-        self._set_switch_state(prop, widget_name, PyIndi.ISS_ON)
-        time.sleep(duration_ms / 1000.0)
-        self._set_switch_state(prop, widget_name, PyIndi.ISS_OFF)
+            timed_prop = self.mount.getNumber(
+                timed_prop_name) if timed_prop_name else None
+            if timed_prop:  # Use timed command if available
+                widget = timed_prop.findWidgetByName(timed_widget_name)
+                if widget:
+                    widget.value = duration_ms
+                    self.sendNewNumber(timed_prop)
+                    return
+
+            prop_name, widget_name = "", ""  # Fallback to switch pulse
+            if direction in ['N', 'S']:
+                prop_name = "TELESCOPE_MOTION_NS"
+                widget_name = "MOTION_NORTH" if direction == 'N' else "MOTION_SOUTH"
+            elif direction in ['W', 'E']:
+                prop_name = "TELESCOPE_MOTION_WE"
+                widget_name = "MOTION_WEST" if direction == 'W' else "MOTION_EAST"
+            else:
+                return
+
+            prop = self.mount.getSwitch(prop_name)
+            if not prop:
+                return
+            widget = prop.findWidgetByName(widget_name)
+            if not widget:
+                return
+            self._set_switch_state(prop, widget_name, PyIndi.ISS_ON)
+            end_time = time.time() + (duration_ms / 1000.0)
+            while time.time() < end_time:
+                if self.shutdown_handle and self.shutdown_handle.is_shutdown():
+                    break
+                time.sleep(0.01) # Non-blocking wait, can be interrupted by shutdown
+            self._set_switch_state(prop, widget_name, PyIndi.ISS_OFF)
 
     def park_mount(self) -> bool:
         """
         Commands the mount to park by slewing to a configured or remembered orientation.
         """
-        park_cfg = CONFIG.get('park', {})
+        with self._mount_lock:
+            park_cfg = CONFIG.get('park', {})
         default_target = (
             float(park_cfg.get('default_az_deg', 180.0)),
             float(park_cfg.get('default_el_deg', 0.0)),
@@ -1110,32 +1177,59 @@ class IndiController(PyIndi.BaseClient):
             with self._blob_lock:
                 self._exposure_queue.put(exposure_token)
                 self._received_blobs.pop(exposure_token, None)
+            
+            # Setup event for exposure command completion
+            exp_prop_key = f"{self.camera.getDeviceName()}.CCD_EXPOSURE"
+            with self._property_events_lock:
+                if exp_prop_key not in self._property_events:
+                    self._property_events[exp_prop_key] = threading.Event()
+                exp_prop_event = self._property_events[exp_prop_key]
+            exp_prop_event.clear() # Clear event before sending command
+
             try:  # Start exposure and wait for BLOB
                 exp_widget.value = exposure_s
                 self.sendNewNumber(exp_prop)
                 cmd_timeout = time.time() + max(5.0, exposure_s + 2.0)
                 prop_state = PyIndi.IPS_BUSY
-                while prop_state == PyIndi.IPS_BUSY and time.time() < cmd_timeout:  # Wait for command accept
-                    if self.shutdown_event and self.shutdown_event.is_set():
+                while time.time() < cmd_timeout:  # Wait for command accept
+                    if self.shutdown_handle and self.shutdown_handle.is_shutdown():
                         raise IOError("Capture aborted (shutdown)")
-                    time.sleep(0.05)
-                    prop = self.camera.getNumber("CCD_EXPOSURE")
-                    prop_state = prop.s if prop else PyIndi.IPS_ALERT
+                    
+                    with self._property_states_lock:
+                        current_exp_state = self._property_states.get(exp_prop_key, PyIndi.IPS_BUSY)
+                    
+                    if current_exp_state != PyIndi.IPS_BUSY:
+                        prop_state = current_exp_state
+                        break
+                    exp_prop_event.wait(timeout=0.05) # Wait for event or timeout
+
                 if prop_state == PyIndi.IPS_ALERT:
                     raise IOError("Exposure command failed (Alert)")
                 if prop_state == PyIndi.IPS_BUSY:
                     raise IOError("Exposure command timed out")
+
+                # Setup event for BLOB arrival
+                with self._blob_events_lock:
+                    if exposure_token not in self._blob_events:
+                        self._blob_events[exposure_token] = threading.Event()
+                    blob_event = self._blob_events[exposure_token]
+                blob_event.clear() # Clear event before waiting
+
                 blob_timeout_time = time.time() + max(15.0, exposure_s * 2.0 + 10.0)
                 while time.time() < blob_timeout_time:  # Wait for BLOB arrival
-                    if self.shutdown_event and self.shutdown_event.is_set():
+                    if self.shutdown_handle and self.shutdown_handle.is_shutdown():
                         raise IOError(
                             "Capture aborted (shutdown waiting for BLOB)")
+                    
+                    # Check if BLOB already arrived (set by newBLOB)
                     with self._blob_lock:
                         if exposure_token in self._received_blobs:
                             received_data = self._received_blobs.pop(
                                 exposure_token)
                             break
-                    time.sleep(0.1)
+
+                    blob_event.wait(timeout=0.1) # Wait for event or timeout
+
                 else:
                     raise IOError(
                         f"Timeout waiting for BLOB ({exposure_s:.3f}s exposure)")
@@ -1147,6 +1241,8 @@ class IndiController(PyIndi.BaseClient):
                 # Always scrub token bookkeeping so a timeout/abort cannot poison later captures
                 with self._blob_lock:
                     self._received_blobs.pop(exposure_token, None)
+                with self._blob_events_lock:
+                    self._blob_events.pop(exposure_token, None) # Clean up blob event
                 try:
                     with self._exposure_queue.mutex:
                         try:
@@ -1232,7 +1328,7 @@ class IndiController(PyIndi.BaseClient):
         paths = []
         images_dir = os.path.join(LOG_DIR, 'images')
         for i in range(num_images):
-            if self.shutdown_event and self.shutdown_event.is_set():
+            if self.shutdown_handle and self.shutdown_handle.is_shutdown():
                 logger.info("  Capture sequence interrupted.")
                 break
             path = os.path.join(

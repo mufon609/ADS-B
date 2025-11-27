@@ -7,7 +7,7 @@ import os
 import sys
 from logging.handlers import RotatingFileHandler
 
-from config_loader import CONFIG, LOG_DIR
+from config.loader import CONFIG, LOG_DIR
 
 
 class FlushingStreamHandler(logging.StreamHandler):
@@ -21,7 +21,10 @@ class FlushingStreamHandler(logging.StreamHandler):
 
 def setup_logging():
     """
-    Configures the root logger for the application.
+    Configure root logging with console + rotating file handlers and exception hook.
+
+    Uses logging settings from CONFIG (level, max size, backup count) and writes to
+    LOG_DIR/gemini.log. Safe to call multiple times; replaces existing handlers.
     """
     log_cfg = CONFIG.get('logging', {})
     log_level_str = log_cfg.get('level', 'INFO').upper()

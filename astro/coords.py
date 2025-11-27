@@ -11,7 +11,7 @@ from astropy.coordinates import AltAz, EarthLocation, SkyCoord, get_sun
 from astropy.time import Time
 from geopy.distance import geodesic
 
-from config_loader import CONFIG
+from config.loader import CONFIG
 
 logger = logging.getLogger(__name__)
 

@@ -241,6 +241,10 @@ function createButtonForm(icao) {
 }
 
 
+/**
+ * Apply latest status payload to the dashboard, updating UI, counts, and link state.
+ * Expects the same schema delivered by /ws/status (server push).
+ */
 function updateDashboard(s) {
     const monitorMode = !!s.monitor_mode;
     const isTracking = s.mode && !['idle', 'initializing', 'error', 'monitor'].includes(s.mode);
@@ -391,7 +395,8 @@ function updateDashboard(s) {
 
 
 /**
- * Renders the latest stack payload, ensuring images persist across pending stacks.
+ * Render the latest stack payload, keeping existing images/links when API omits them.
+ * Accepts payload from /api/latest_stack.
  */
 function renderLatestStackPayload(p) {
   if (!p || !p.products) return;
@@ -476,6 +481,7 @@ function _setLinkStable(el, newUrl, variant, kind) {
 }
 
 
+/** Fetch the latest stack on demand (used after WebSocket updates). */
 function refreshLatestStack(){
   fetch('/api/latest_stack', {cache:'no-store'})
     .then(r => { if (r.status === 404) return null; return r.json(); })
@@ -537,6 +543,7 @@ function handleCommandForms() {
     });
 }
 
+/** Establish a resilient WebSocket connection with automatic reconnect. */
 function connectWebSocket() {
     clearTimeout(reconnectTimeout);
     

@@ -1,0 +1,39 @@
+# Python basics
+__pycache__/
+*.py[cod]
+*.pyo
+*.so
+.env
+.venv/
+venv/
+
+# Logs and runtime data
+logs/
+*/logs/
+*.log
+
+# Imaging/stack outputs
+logs/images/
+logs/stack/
+*.fits
+*.png
+
+# Local config / overrides
+config.local.yaml
+*.env
+
+# Tooling
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Coverage/test artifacts
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Build/dist
+dist/
+build/
+*.egg-info/

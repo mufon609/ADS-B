@@ -9,14 +9,13 @@ import logging
 import os
 from typing import Dict, Optional, Tuple
 
+import traceback
+
 import cv2
 import numpy as np
 from astropy.io import fits
-from astropy.visualization import ImageNormalize, ZScaleInterval
-import imutils
-import traceback
 
-from config_loader import CONFIG
+from config.loader import CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -55,58 +54,6 @@ def _load_fits_data(image_path: str) -> Optional[np.ndarray]:
     except Exception as e:
         # Catch other errors during FITS loading
         logger.error(f"Error loading FITS file {image_path}: {e}")
-        return None
-
-
-def _normalize_zscale(image_data: np.ndarray) -> Optional[np.ndarray]:
-    """Applies ZScale normalization to float32 data."""
-    try:
-        # Check for empty or non-numeric data before normalization
-        if image_data.size == 0 or not np.issubdtype(image_data.dtype, np.number):
-            logger.warning(
-                "Warning: Cannot normalize empty or non-numeric data.")
-            return None
-        # ZScale can fail on flat images, handle this
-        min_val, max_val = np.nanmin(image_data), np.nanmax(image_data)
-        if (
-            (not np.isfinite(min_val))
-            or (not np.isfinite(max_val))
-            or (min_val == max_val)
-        ):
-            # Return a constant array if image is flat or all non-finite
-            return np.zeros_like(image_data, dtype=np.float32)
-
-        norm = ImageNormalize(interval=ZScaleInterval())
-        normed_data = norm(image_data)
-        # Handle potential masked arrays from astropy
-        if hasattr(normed_data, 'mask'):
-            # Fill masked values with median of non-masked, or 0 if all masked
-            fill_val = (
-                np.ma.median(normed_data) if not np.all(normed_data.mask)
-                else 0
-            )
-            normed_data = np.ma.filled(normed_data, fill_value=fill_val)
-
-        # Ensure output is float32
-        return normed_data.astype(np.float32)
-    except Exception as e:
-        logger.error(f"Error during ZScale normalization: {e}")
-        # Return zeros on error
-        return np.zeros_like(image_data, dtype=np.float32)
-
-
-def _normalize_to_8bit(normed_float_data: np.ndarray) -> Optional[np.ndarray]:
-    """Normalizes float data (expected range 0-1 or ZScale output) to uint8 (0-255)."""
-    try:
-        # Check input data validity
-        if normed_float_data is None or normed_float_data.size == 0:
-            return None
-        # Use cv2.normalize for robust min-max scaling to 0-255
-        img_8bit = cv2.normalize(
-            normed_float_data, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
-        return img_8bit
-    except Exception as e:
-        logger.error(f"Error converting to 8-bit: {e}")
         return None
 
 # === Internal Processing Functions (operate on NumPy arrays) ===
@@ -266,7 +213,7 @@ def _detect_aircraft_from_data(image_data: np.ndarray, original_shape: Tuple[int
 
         cnts = cv2.findContours(
             thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        contours = imutils.grab_contours(cnts)
+        contours = cnts[0] if len(cnts) == 2 else cnts[1]
 
         if not contours:
             return {'detected': False, 'reason': 'no_contours_found', 'sharpness': sharpness}
@@ -375,7 +322,15 @@ def _save_png_preview_from_data(image_data: np.ndarray, png_path: str) -> str:
 
 
 def measure_sharpness(image_path: str) -> float:
-    """Measures image sharpness, using robust min-max normalization."""
+    """
+    Measure image sharpness (Laplacian variance) from a FITS file.
+
+    Args:
+        image_path: Path to a FITS image (single-plane).
+
+    Returns:
+        Laplacian variance as a float; 0.0 on load/processing failure.
+    """
     if CONFIG['development']['dry_run']:
         if "autofocus" in os.path.basename(image_path):
             # Keep autofocus simulation logic
@@ -392,8 +347,14 @@ def measure_sharpness(image_path: str) -> float:
 
 def save_png_preview(fits_path: str, png_path_out: Optional[str] = None) -> str:
     """
-    Creates a PNG preview from a FITS file.
-    Uses ZScale for real images, min-max for dry run.
+    Generate a PNG preview from a FITS file and return the PNG path.
+
+    Args:
+        fits_path: Input FITS path.
+        png_path_out: Optional output path; defaults to ``<fits_path>.png``.
+
+    Returns:
+        Path to the written PNG, or empty string on failure.
     """
     if not os.path.exists(fits_path):
         logger.warning(

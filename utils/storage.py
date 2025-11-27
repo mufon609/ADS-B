@@ -10,7 +10,7 @@ import time
 from collections import defaultdict
 from typing import Any, Dict, Iterable, List, Optional
 
-from config_loader import CONFIG, LOG_DIR
+from config.loader import CONFIG, LOG_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -18,13 +18,21 @@ _file_locks = defaultdict(threading.Lock)
 
 
 def ensure_log_dir():
-    """Creates log directory and images subdir if they don't exist, using absolute paths."""
+    """Create LOG_DIR and its images subdir if they don't exist, using absolute paths."""
     os.makedirs(LOG_DIR, exist_ok=True)
     os.makedirs(os.path.join(LOG_DIR, 'images'), exist_ok=True)
 
 
 def rel_to_logs_url(path: str) -> Optional[str]:
-    """Map an absolute path under LOG_DIR to a /logs/... URL for UI links."""
+    """
+    Map an absolute path under LOG_DIR to a /logs/... URL for UI consumption.
+
+    Args:
+        path: Absolute or relative path to a file under LOG_DIR.
+
+    Returns:
+        URL string like ``/logs/stack/...`` if path is inside LOG_DIR; otherwise None.
+    """
     if not path:
         return None
     try:
@@ -141,6 +149,10 @@ def append_to_json(datas: List[Dict[str, Any]], file_path: str):
     Appends records to a JSON log file atomically, with pre-emptive rotation.
     Thread-safe via per-file locks; writes go through a temp file + rename and will rotate
     before exceeding the configured size.
+
+    Args:
+        datas: List of record dicts to append (ignored if empty/non-dicts).
+        file_path: Target JSON log path (created if missing, rotated when oversized).
     """
     # Ensure datas is a list and not empty
     if not isinstance(datas, list) or not datas or not all(isinstance(x, dict) for x in datas):

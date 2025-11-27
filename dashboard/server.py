@@ -14,7 +14,7 @@ import time
 from typing import Dict, List, Optional, Tuple
 
 from utils.logger_config import setup_logging
-from config_loader import CONFIG, LOG_DIR
+from config.loader import CONFIG, LOG_DIR
 
 import uvicorn
 from fastapi import FastAPI, Form, Request, WebSocket, WebSocketDisconnect, HTTPException
@@ -59,16 +59,23 @@ class ConnectionManager:
         self.active_connections: List[WebSocket] = []
 
     async def connect(self, websocket: WebSocket):
+        """Accept and register a new WebSocket client."""
         await websocket.accept()
         self.active_connections.append(websocket)
 
     def disconnect(self, websocket: WebSocket):
+        """Remove a WebSocket client from the active set (ignoring missing entries)."""
         try:
             self.active_connections.remove(websocket)
         except ValueError:
             pass
 
     async def broadcast(self, data: Dict):
+        """
+        Send a JSON-serializable payload to all connected clients.
+
+        Exceptions during send are logged and the offending connection is pruned.
+        """
         message = json.dumps(data)
         
         send_tasks = []
@@ -139,7 +146,12 @@ def _read_status_from_disk() -> Tuple[Optional[Dict], Optional[float]]:
 
 
 def read_status_cached() -> Dict:
-    """Returns the latest status data from cache for API endpoints."""
+    """
+    Return the most recently cached status payload without hitting disk.
+
+    The cache is refreshed by ``status_poller_task``; this accessor is safe to use
+    inside request handlers to avoid filesystem I/O.
+    """
     global _STATUS_CACHE
     return _STATUS_CACHE['data']
 
@@ -252,7 +264,13 @@ def _scan_stack_root() -> Dict:
 
 
 def write_command(command: dict):
-    """Atomically writes a command to the command file."""
+    """
+    Atomically persist a command for the backend process to consume.
+
+    Args:
+        command: Dict payload (e.g., ``{"track_icao": "abcd12"}``) to be written to
+            ``COMMAND_FILE``. File is fsync'd and replaced to avoid partial reads.
+    """
     try:
         os.makedirs(os.path.dirname(COMMAND_FILE), exist_ok=True)
         fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(
@@ -476,6 +494,14 @@ async def api_latest_stack():
 async def api_recent_stacks(icao: str, limit: int = 5):
     """
     List recent sequence directories for a given ICAO (newest first), read from cache.
+
+    Args:
+        icao: ICAO identifier (case-insensitive).
+        limit: Max number of recent sequences to return (default 5).
+
+    Returns:
+        JSON payload with ``items`` list and the sanitized ``icao``. Returns 404 with an
+        informative message when no sequences are available.
     """
     global _STACK_CACHE
     # Sanitize icao

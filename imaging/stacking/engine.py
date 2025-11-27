@@ -8,21 +8,18 @@ the mean, robust sigma‑clipped mean and anomaly map are computed in
 parallel threads.  The number of internal threads is determined by the
 ``internal_threads`` parameter passed via ``params`` (default 3).
 
-The module exposes two public entry points:
+Public entry point:
 
 * ``stack_images_multi`` – Given a list of FITS paths, produces mean,
   robust and anomaly stacks and writes FITS/PNG outputs into an output
   directory. Returns a dictionary of saved products and a QC report.
-
-* ``stack_images`` – Legacy wrapper that returns only the robust FITS
-  path and QC report for backwards compatibility.
 """
 
 import logging
 import os
 import traceback
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 import cv2
 import numpy as np
@@ -30,7 +27,7 @@ import traceback
 from astropy.io import fits
 from astropy.stats import sigma_clipped_stats
 
-from imaging.image_analyzer import _detect_aircraft_from_data, _load_fits_data
+from imaging.analysis import _detect_aircraft_from_data, _load_fits_data
 
 logger = logging.getLogger(__name__)
 
@@ -223,6 +220,16 @@ def stack_images_multi(image_paths: List[str], output_dir: str, params: Dict) ->
     Main stacking pipeline with concurrent computations for speed.
     Loads/detects/aligns frames, then uses an internal ThreadPoolExecutor for mean/robust/anomaly stacks.
     Requires at least 2 usable frames; returns product paths and a QC dict (with errors when applicable).
+
+    Args:
+        image_paths: List of FITS file paths to stack.
+        output_dir: Directory where FITS/PNG products will be written.
+        params: Stacking configuration (sigma_clip_z, anomaly_mask_radius_px, internal_threads, etc.).
+
+    Returns:
+        Tuple of (products, qc):
+          - products: nested dict keyed by stack type (mean/robust/anomaly) with optional ``fits`` and ``png`` paths.
+          - qc: quality-control metadata including counts, mask fractions, and any error strings.
     """
     qc: Dict = {}
     products: Dict = {}
@@ -348,17 +355,3 @@ def stack_images_multi(image_paths: List[str], output_dir: str, params: Dict) ->
         traceback.print_exc()
         qc["error"] = f"Unhandled exception: {e}"
         return products, qc
-
-
-def stack_images(image_paths: List[str], output_dir: str, params: Dict) -> Tuple[Optional[str], Dict]:
-    """Legacy API wrapper returning only the robust FITS path and QC."""
-    products, qc = stack_images_multi(image_paths, output_dir, params)
-    if qc.get("error") or (
-        not products.get("robust", {}).get("fits")
-    ):
-        if not qc.get("error"):
-            qc["error"] = "Robust FITS output missing after stacking."
-        logger.error(
-            f"  - Stacker (Legacy): Stacking failed. Reason: {qc.get('error', 'Unknown error')}")
-        return None, qc
-    return products["robust"]["fits"], qc

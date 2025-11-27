@@ -11,7 +11,7 @@ import os
 import sys
 from pathlib import Path
 
-# Ensure imports/config work when run from tools/ by resolving the repo root
+# Ensure imports/config work when run from scripts/ by resolving the repo root
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -21,7 +21,7 @@ os.environ.setdefault("ADSB_CONFIG_FILE", str(REPO_ROOT / "config.yaml"))
 import astropy.units as u
 from astropy.coordinates import EarthLocation
 
-from coord_utils import distance_km, latlonalt_to_azel
+from astro.coords import distance_km, latlonalt_to_azel
 from adsb.dead_reckoning import estimate_positions_at_times
 from utils.logger_config import setup_logging
 

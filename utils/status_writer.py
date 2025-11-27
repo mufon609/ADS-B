@@ -11,7 +11,7 @@ import time
 
 import numpy as np
 
-from config_loader import CONFIG, LOG_DIR
+from config.loader import CONFIG, LOG_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,11 @@ _status_lock = threading.Lock()
 _current_status_cache: dict = {"mode": "initializing"}
 
 def convert_numpy_types(obj):
-    """Recursively converts NumPy types in a dict/list to standard Python types for JSON."""
+    """
+    Recursively convert NumPy scalars/arrays/complex/boolean to JSON-safe Python types.
+
+    Handles nested dicts/lists; non-finite floats become None; arrays are converted to lists.
+    """
     if isinstance(obj, dict):
         return {k: convert_numpy_types(v) for k, v in obj.items()}
     elif isinstance(obj, list):
@@ -62,6 +66,9 @@ def write_status(status: dict):
     to a JSON file the dashboard can read.
     Thread-safe via a lock; writes go through a temp file + rename with fsync,
     and numpy types are converted for JSON safety.
+
+    Args:
+        status: Partial status update to merge into the cached payload.
     """
     global _current_status_cache # Explicitly modify global cache
 

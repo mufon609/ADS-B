@@ -133,7 +133,7 @@ development:
    - Compute pixel offset from frame center
    - Issue corrective RA/Dec pulse if outside deadzone
 5. When centroid stable → trigger burst sequence
-6. `stack_orchestrator.py` queues raw frames → `stacker.py` produces aligned stack + anomaly map
+6. `stacking/orchestrator.py` queues raw frames → `stacking/engine.py` produces aligned stack + anomaly map
 
 ## Project Structure
 ```
@@ -141,20 +141,21 @@ development:
 ├── main.py                  # State machine & thread orchestration
 ├── config.yaml              # Full configuration
 ├── adsb/
-│   ├── aircraft_selector.py # EV scoring & filtering
+│   ├── selector.py          # EV scoring & filtering
 │   ├── data_reader.py       # ADS-B ingestion + sanitization
 │   └── dead_reckoning.py    # Position prediction / extrapolation
 ├── hardware_control.py      # INDI client wrapper
 ├── imaging/
-│   ├── image_analyzer.py    # Blob detection, sharpness, exposure estimation
-│   ├── stacker.py           # Alignment + sigma-clipped stacking
-│   └── stack_orchestrator.py# Background job queue
+│   ├── analysis.py          # Blob detection, sharpness, exposure estimation
+│   ├── stacking/
+│   │   ├── engine.py        # Alignment + sigma-clipped stacking
+│   │   └── orchestrator.py  # Background job queue
 ├── utils/
 │   ├── logger_config.py     # Logging setup
 │   ├── status_writer.py     # Status JSON writer
 │   └── storage.py           # JSON append/URL helpers
-├── tools/                   # Calib, simulator, cleanup, tests
-├── coord_utils.py           # All astrometry / coordinate math
+├── scripts/                 # Calib, simulator, cleanup, tests
+├── astro/coords.py          # All astrometry / coordinate math
 ├── dashboard/
 │   └── server.py + templates
 └── logs/

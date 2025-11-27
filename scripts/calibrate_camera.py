@@ -11,14 +11,14 @@ import time
 import sys
 from pathlib import Path
 
-# Ensure imports/config work when run from tools/ by resolving the repo root
+# Ensure imports/config work when run from scripts/ by resolving the repo root
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 # Default config path relative to repo root if env var not set
 os.environ.setdefault("ADSB_CONFIG_FILE", str(REPO_ROOT / "config.yaml"))
 
-from config_loader import CONFIG
+from config.loader import CONFIG
 from hardware_control import IndiController
 from utils.logger_config import setup_logging
 

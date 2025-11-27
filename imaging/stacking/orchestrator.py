@@ -4,7 +4,7 @@ Asynchronous orchestrator for image stacking.
 This module runs the stacking pipeline in background threads. It reads
 ``stacking.num_workers`` from the configuration to determine how many
 concurrent sequences can be processed at once. Each stacking job calls
-``stack_images`` from ``stacker.py``, which itself computes mean,
+``stack_images_multi`` from ``engine.py``, which computes mean,
 robust and anomaly stacks concurrently.
 """
 
@@ -19,9 +19,9 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional
 
-from config_loader import CONFIG, LOG_DIR
+from config.loader import CONFIG, LOG_DIR
 from utils.storage import rel_to_logs_url
-from imaging.stacker import stack_images
+from imaging.stacking.engine import stack_images_multi
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ def request_shutdown() -> None:
 
 
 def _ensure_executor() -> None:
-    """Initializes the background thread pool based on the config."""
+    """Initialize the background thread pool based on configuration."""
     global _executor
     if _executor is None:
         with _executor_lock:
@@ -63,6 +63,11 @@ def schedule_stack_and_publish(sequence_id: str, image_paths: List[str], capture
     returns immediately.
     Honors the global shutdown flag: once shutdown is requested, new tasks are not accepted,
     but previously submitted tasks will still run to completion unless the executor was torn down.
+
+    Args:
+        sequence_id: Unique sequence identifier (typically ``<icao>_<timestamp>``).
+        image_paths: List of FITS frames to stack.
+        capture_meta: Metadata dict to embed in the manifest.
     """
     # Do not schedule new jobs if stacking is disabled or shutdown has been requested
     if not CONFIG.get('stacking', {}).get('enabled', False):
@@ -86,7 +91,7 @@ def schedule_stack_and_publish(sequence_id: str, image_paths: List[str], capture
 
 
 def _derive_icao(sequence_id: str) -> str:
-    """Extract the ICAO code from the sequence ID (prefix before the first underscore)."""
+    """Extract the ICAO code from ``sequence_id`` (prefix before the first underscore)."""
     if not sequence_id:
         return "unknown"
     if "_" in sequence_id:
@@ -99,7 +104,12 @@ def _run_stacking_pipeline(sequence_id: str, image_paths: List[str], capture_met
     Worker function that stacks a sequence in a background thread.
 
     It builds a nested directory under LOG_DIR/stack/ICAO/sequence_id, calls
-    ``stack_images``, then writes a manifest JSON summarizing the results.
+    ``stack_images_multi``, then writes a manifest JSON summarizing the results.
+
+    Args:
+        sequence_id: Unique sequence identifier.
+        image_paths: List of FITS paths for the sequence.
+        capture_meta: Metadata describing capture context (exposure, gain, etc.).
     """
     try:
         icao = _derive_icao(sequence_id)
@@ -111,7 +121,8 @@ def _run_stacking_pipeline(sequence_id: str, image_paths: List[str], capture_met
         os.makedirs(out_dir, exist_ok=True)
         # Copy stacking parameters from config; these include sigma_clip_z, anomaly_mask_radius_px, internal_threads, etc.
         params = CONFIG.get('stacking', {}).copy()
-        master_fits, qc = stack_images(image_paths, out_dir, params)
+        products, qc = stack_images_multi(image_paths, out_dir, params)
+        master_fits = (products.get("robust") or {}).get("fits")
         # Determine status
         if not master_fits or qc.get("error"):
             logger.error(
@@ -130,9 +141,7 @@ def _run_stacking_pipeline(sequence_id: str, image_paths: List[str], capture_met
             "stack_params_used": params,
             "qc": qc,
             "outputs": {
-                "master_fits": (
-                    rel_to_logs_url(master_fits) if master_fits else None
-                ),
+                "master_fits": rel_to_logs_url(master_fits) if master_fits else None,
                 "sequence_mean_png": rel_to_logs_url(
                     os.path.join(out_dir, "stack_mean.png")),
                 "sequence_robust_png": rel_to_logs_url(
@@ -168,6 +177,9 @@ def shutdown() -> None:
         logger.info("  Orchestrator: Shutting down stacking thread pool...")
         try:
             _executor.shutdown(wait=True)
+        except KeyboardInterrupt:
+            # Allow Ctrl+C during shutdown to continue overall teardown without a traceback.
+            logger.warning("  Orchestrator: Shutdown interrupted; continuing teardown without waiting for workers.")
         finally:
             _executor = None
             logger.info("  Orchestrator: Stacking thread pool shut down.")

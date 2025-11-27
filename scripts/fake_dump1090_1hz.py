@@ -21,7 +21,7 @@ import time
 import sys
 from pathlib import Path
 
-# Ensure imports/config work when run from tools/ by resolving the repo root
+# Ensure imports/config work when run from scripts/ by resolving the repo root
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -64,9 +64,15 @@ def clamp(x, lo, hi):
 def atomic_write(path, payload_str):
     """Writes a string to a path atomically to prevent race conditions."""
     tmp = path + ".tmp"
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(tmp, "w") as f:
         f.write(payload_str)
-    os.replace(tmp, path)
+    try:
+        os.replace(tmp, path)
+    except FileNotFoundError:
+        # If the temp file vanished (e.g., interrupted), fall back to a direct write
+        with open(path, "w") as f:
+            f.write(payload_str)
 
 # ---------- main ----------
 def main():

@@ -23,7 +23,7 @@ observer:
 
 selection:
   min_altitude_ft: 1000
-  min_elevation_deg: 10
+  min_elevation_deg: 5
   max_angular_speed_deg_s: 1.0
   preempt_factor: 1.25
   min_sun_separation_deg: 15
